@@ -20,3 +20,9 @@ CoreWars:
   MaxCycles: 80000
   MaxProcesses: 8000
   MinWarriorSeparation: 100
+
+Window:
+  Width: 1200
+  Height: 800
+  Title: "Core Wars Visualizer"
+  TargetFPS: 60

@@ -1,7 +1,11 @@
 ﻿using System.CommandLine;
+using System.Reactive.Linq;
+using CoreTrainer.Graphics.Simulation;
+using CoreTrainer.Graphics.UI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using NetEscapades.Configuration.Yaml;
 using Raylib_cs;
 using Serilog;
@@ -78,6 +82,7 @@ public static class Program
 			{
 				// Configure options from appsettings.yaml
 				services.Configure<CoreWarsOptions>(context.Configuration.GetSection("CoreWars"));
+				services.Configure<WindowOptions>(context.Configuration.GetSection("Window"));
 
 				// Register services
 				services.AddSingleton<IWarriorFactory, WarriorFactory>();
@@ -126,25 +131,148 @@ public static class Program
 
 	private static void RunGuiMode(IServiceProvider services)
 	{
-		const int windowWidth = 1200;
-		const int windowHeight = 800;
+		var windowOptions = services.GetRequiredService<IOptions<WindowOptions>>().Value;
+		var warriorFactory = services.GetRequiredService<IWarriorFactory>();
 
-		Raylib.InitWindow(windowWidth, windowHeight, "Core Wars Visualizer");
-		Raylib.SetTargetFPS(60);
+		Raylib.InitWindow(windowOptions.Width, windowOptions.Height, windowOptions.Title);
+		Raylib.SetTargetFPS(windowOptions.TargetFPS);
+		Raylib.SetExitKey(KeyboardKey.Null); // Disable ESC to exit
 
-		Log.Information("Raylib window initialized: {Width}x{Height}", windowWidth, windowHeight);
+		Log.Information("Raylib window initialized: {Width}x{Height}", windowOptions.Width, windowOptions.Height);
 
-		while (!Raylib.WindowShouldClose())
+		// Create simulation controller
+		var simController = new SimulationController();
+
+		// Create control toolbar
+		var toolbar = new Toolbar(10, 10, windowOptions.Width - 130, 60);
+		var stepButton = toolbar.AddButton("Step");
+		var runPauseButton = toolbar.AddButton("Run");
+		var resetButton = toolbar.AddButton("Reset");
+		var speedDownButton = toolbar.AddButton("<<", 50);
+		var speedLabel = toolbar.AddLabel("1/s", 70);
+		speedLabel.BackgroundColor = Graphics.ColorScheme.Default.PanelBackground;
+		speedLabel.BorderColor = Graphics.ColorScheme.Default.GridLine;
+		var speedUpButton = toolbar.AddButton(">>", 50);
+
+		// Create close button in top-right corner
+		var closeButton = new Button(
+			x: windowOptions.Width - 110,
+			y: 10,
+			width: 100,
+			height: 40,
+			text: "Close"
+		);
+
+		var shouldClose = false;
+
+		// Initialize a battle
+		var dwarf = warriorFactory.CreateDwarf();
+		var imp = warriorFactory.CreateImp();
+		var random = new Random();
+		var warrior0Start = random.Next(8000);
+		var warrior1Start = (warrior0Start + 4000) % 8000; // Separated
+
+		simController.Initialize(dwarf, imp, warrior0Start, warrior1Start);
+		Log.Information("Simulation initialized: Dwarf at {W0}, Imp at {W1}", warrior0Start, warrior1Start);
+
+		// Subscribe to button click events
+		var subscriptions = new List<IDisposable>
 		{
-			Raylib.BeginDrawing();
-			Raylib.ClearBackground(Raylib_cs.Color.RayWhite);
+			stepButton.Clicked.Subscribe(_ =>
+			{
+				Log.Information("Step button clicked");
+				simController.Step();
+			}),
 
-			// Draw simple placeholder text
-			Raylib.DrawText("Core Wars Visualizer", 400, 300, 40, Raylib_cs.Color.Black);
-			Raylib.DrawText("Press ESC to exit", 480, 360, 20, Raylib_cs.Color.DarkGray);
-			Raylib.DrawText("Visualization coming soon...", 430, 400, 20, Raylib_cs.Color.Gray);
+			runPauseButton.Clicked.Subscribe(_ =>
+			{
+				simController.TogglePause();
+				runPauseButton.Text = simController.State == SimulationState.Running ? "Pause" : "Run";
+				Log.Information("{Action} button clicked", runPauseButton.Text);
+			}),
+
+			resetButton.Clicked.Subscribe(_ =>
+			{
+				Log.Information("Reset button clicked");
+				simController.Reset();
+				simController.Initialize(dwarf, imp, warrior0Start, warrior1Start);
+			}),
+
+			speedDownButton.Clicked.Subscribe(_ =>
+			{
+				simController.DecreaseSpeed();
+				speedLabel.Text = simController.GetSpeedDisplay();
+				Log.Information("Speed decreased to {Speed}", speedLabel.Text);
+			}),
+
+			speedUpButton.Clicked.Subscribe(_ =>
+			{
+				simController.IncreaseSpeed();
+				speedLabel.Text = simController.GetSpeedDisplay();
+				Log.Information("Speed increased to {Speed}", speedLabel.Text);
+			}),
+
+			closeButton.Clicked.Subscribe(_ =>
+			{
+				Log.Information("Close button clicked");
+				shouldClose = true;
+			})
+		};
+
+		while (!shouldClose && !Raylib.WindowShouldClose())
+		{
+			var deltaTime = Raylib.GetFrameTime();
+
+			// Update simulation
+			simController.Update(deltaTime);
+
+			// Update all buttons (to detect clicks and emit events)
+			toolbar.Update();
+			closeButton.Update();
+
+			// Rendering
+			Raylib.BeginDrawing();
+			Raylib.ClearBackground(Graphics.ColorScheme.Default.Background);
+
+			// Draw status information
+			var statusY = 90;
+			var statusColor = Raylib_cs.Color.White;
+
+			if (simController.Mars != null)
+			{
+				Raylib.DrawText($"Cycle: {simController.Mars.CurrentCycle}", 20, statusY, 20, statusColor);
+				Raylib.DrawText($"State: {simController.State}", 20, statusY + 30, 20, statusColor);
+
+				var warrior0Processes = simController.Mars.GetProcessQueue(0).Count;
+				var warrior1Processes = simController.Mars.GetProcessQueue(1).Count;
+				Raylib.DrawText($"Dwarf Processes: {warrior0Processes}", 20, statusY + 60, 20, statusColor);
+				Raylib.DrawText($"Imp Processes: {warrior1Processes}", 20, statusY + 90, 20, statusColor);
+
+				if (simController.State == SimulationState.Finished)
+				{
+					var result = simController.LastResult switch
+					{
+						Core.ExecutionResult.Warrior0Wins => "Dwarf Wins!",
+						Core.ExecutionResult.Warrior1Wins => "Imp Wins!",
+						Core.ExecutionResult.Draw => "Draw",
+						Core.ExecutionResult.MaxCyclesReached => "Time Limit Reached",
+						_ => "Unknown"
+					};
+					Raylib.DrawText($"Result: {result}", 20, statusY + 120, 24, Raylib_cs.Color.Yellow);
+				}
+			}
+
+			// Render UI
+			toolbar.Render();
+			closeButton.Render();
 
 			Raylib.EndDrawing();
+		}
+
+		// Clean up subscriptions
+		foreach (var subscription in subscriptions)
+		{
+			subscription.Dispose();
 		}
 
 		Raylib.CloseWindow();
