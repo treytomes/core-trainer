@@ -11,6 +11,9 @@ Core Trainer is a .NET 10 Core Wars (Redcode) simulator that allows warrior prog
 - Four addressing modes (Immediate, Direct, Indirect, Decrement)
 - Process queue management for multi-threaded warriors
 - Demo console application with classic warriors (Dwarf vs Imp)
+- Microsoft.Extensions.Hosting with dependency injection
+- Serilog structured logging (console + rolling files)
+- YAML-based configuration
 
 ## Architecture
 
@@ -31,12 +34,19 @@ core-trainer/
 
 ### Key Components
 
+**Core Library (CoreTrainer.Core):**
 - **[Instruction](src/CoreTrainer.Core/Instruction.cs)** - Immutable record representing a Redcode instruction
 - **[CoreMemory](src/CoreTrainer.Core/CoreMemory.cs)** - 8000-cell memory arena with wraparound addressing
 - **[Mars](src/CoreTrainer.Core/Mars.cs)** - Execution engine managing process queues and instruction execution
 - **[Warrior](src/CoreTrainer.Core/Warrior.cs)** - Container for warrior programs
 - **[OpCode](src/CoreTrainer.Core/OpCode.cs)** - Enum of supported Redcode operations
 - **[AddressingMode](src/CoreTrainer.Core/AddressingMode.cs)** - Enum of addressing modes
+
+**Console Application (CoreTrainer.Console):**
+- **[BattleService](src/CoreTrainer.Console/BattleService.cs)** - Orchestrates battles with logging
+- **[IWarriorFactory](src/CoreTrainer.Console/IWarriorFactory.cs)** / **[WarriorFactory](src/CoreTrainer.Console/WarriorFactory.cs)** - Creates warrior instances
+- **[CoreWarsOptions](src/CoreTrainer.Console/CoreWarsOptions.cs)** - Strongly-typed configuration
+- **[appsettings.yaml](src/CoreTrainer.Console/appsettings.yaml)** - YAML configuration file
 
 ### Design Patterns
 

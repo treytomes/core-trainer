@@ -44,6 +44,34 @@ The execution engine that:
 - Executes instructions in round-robin fashion
 - Determines winners when opponent processes die
 
+## Architecture
+
+The application uses Microsoft.Extensions.Hosting with dependency injection and Serilog for structured logging.
+
+### Key Components
+
+- **BattleService** - Orchestrates battles between warriors with proper logging
+- **WarriorFactory** - Creates classic warrior programs
+- **CoreWarsOptions** - Configuration from appsettings.json
+
+### Configuration
+
+The simulator is configured via [appsettings.yaml](src/CoreTrainer.Console/appsettings.yaml):
+
+```yaml
+CoreWars:
+  CoreSize: 8000
+  MaxCycles: 80000
+  MaxProcesses: 8000
+  MinWarriorSeparation: 100
+```
+
+### Logging
+
+Serilog logs to:
+- **Console** - Structured output with timestamps
+- **Rolling files** - `logs/corewar-YYYYMMDD.log` (retained for 7 days)
+
 ## Running the Demo
 
 ### Windows (Batch Scripts)
