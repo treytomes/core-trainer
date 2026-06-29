@@ -1,5 +1,8 @@
 namespace CoreTrainer.Core;
 
+/// <summary>
+/// MARS (Memory Array Redcode Simulator) execution engine that manages warrior processes and executes Redcode instructions.
+/// </summary>
 public class Mars
 {
 	#region Fields
@@ -7,19 +10,26 @@ public class Mars
 	private readonly CoreMemory _core;
 	private readonly Queue<int>[] _processQueues;
 	private readonly int _maxCycles;
+	private readonly int _maxProcesses;
 	private int _currentCycle;
 
 	#endregion
 
 	#region Constructors
 
-	public Mars(int coreSize = 8000, int maxCycles = 80000)
+	public Mars(int coreSize = 8000, int maxCycles = 80000, int maxProcesses = 8000)
 	{
+		if (maxCycles <= 0)
+			throw new ArgumentOutOfRangeException(nameof(maxCycles), "Max cycles must be positive");
+		if (maxProcesses <= 0)
+			throw new ArgumentOutOfRangeException(nameof(maxProcesses), "Max processes must be positive");
+
 		_core = new CoreMemory(coreSize);
 		_processQueues = new Queue<int>[2];
 		_processQueues[0] = new Queue<int>();
 		_processQueues[1] = new Queue<int>();
 		_maxCycles = maxCycles;
+		_maxProcesses = maxProcesses;
 		_currentCycle = 0;
 	}
 
@@ -37,6 +47,12 @@ public class Mars
 
 	public void LoadWarrior(int warriorIndex, Warrior warrior, int startAddress)
 	{
+		if (warriorIndex < 0 || warriorIndex >= _processQueues.Length)
+			throw new ArgumentOutOfRangeException(nameof(warriorIndex),
+				$"Warrior index must be between 0 and {_processQueues.Length - 1}");
+		if (warrior == null)
+			throw new ArgumentNullException(nameof(warrior));
+
 		warrior.StartAddress = startAddress;
 		_core.Load(startAddress, warrior.Instructions);
 		_processQueues[warriorIndex].Enqueue(startAddress);
@@ -49,7 +65,7 @@ public class Mars
 		while (_currentCycle < _maxCycles)
 		{
 			// Execute one instruction for each warrior.
-			for (var i = 0; i < 2; i++)
+			for (var i = 0; i < _processQueues.Length; i++)
 			{
 				if (_processQueues[i].Count == 0)
 					continue;
@@ -169,7 +185,11 @@ public class Mars
 			case OpCode.SPL:
 				{
 					var aAddr = ResolveAddress(pc, instruction.AMode, instruction.AValue);
-					_processQueues[warriorIndex].Enqueue(aAddr); // Create new process
+					// Only create new process if under the limit
+					if (_processQueues[warriorIndex].Count < _maxProcesses)
+					{
+						_processQueues[warriorIndex].Enqueue(aAddr);
+					}
 					return _core.Normalize(pc + 1);
 				}
 

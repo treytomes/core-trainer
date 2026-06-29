@@ -1,5 +1,8 @@
 namespace CoreTrainer.Core;
 
+/// <summary>
+/// Represents a single Redcode instruction with opcode, addressing modes, and operand values.
+/// </summary>
 public record Instruction
 {
 	#region Constructors
@@ -39,24 +42,16 @@ public record Instruction
 
 	public override string ToString()
 	{
-		var aModeStr = AMode switch
-		{
-			AddressingMode.Immediate => "#",
-			AddressingMode.Indirect => "@",
-			AddressingMode.Decrement => "<",
-			_ => "$"
-		};
-
-		var bModeStr = BMode switch
-		{
-			AddressingMode.Immediate => "#",
-			AddressingMode.Indirect => "@",
-			AddressingMode.Decrement => "<",
-			_ => "$"
-		};
-
-		return $"{OpCode} {aModeStr}{AValue}, {bModeStr}{BValue}";
+		return $"{OpCode} {GetModeSymbol(AMode)}{AValue}, {GetModeSymbol(BMode)}{BValue}";
 	}
+
+	private static string GetModeSymbol(AddressingMode mode) => mode switch
+	{
+		AddressingMode.Immediate => "#",
+		AddressingMode.Indirect => "@",
+		AddressingMode.Decrement => "<",
+		_ => "$"
+	};
 
 	#endregion
 }

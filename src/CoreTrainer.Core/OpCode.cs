@@ -62,9 +62,9 @@ public enum OpCode
 	/// </summary>
 	CMP,
 
-	// <summary>
+	/// <summary>
 	/// Skip if Less Than
-	/// </summary>n
+	/// </summary>
 	SLT,
 
 	/// <summary>

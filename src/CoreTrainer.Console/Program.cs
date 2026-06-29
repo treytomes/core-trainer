@@ -18,11 +18,15 @@ public static class Program
 		// Load warriors at different positions
 		var random = new Random();
 		var warrior1Pos = random.Next(mars.Core.Size);
-		int warrior2Pos;
+		var warrior2Pos = 0;
+		var circularDistance = 0;
 		do
 		{
 			warrior2Pos = random.Next(mars.Core.Size);
-		} while (Math.Abs(warrior1Pos - warrior2Pos) < 100);
+			// Calculate circular distance accounting for wraparound
+			var linearDistance = Math.Abs(warrior1Pos - warrior2Pos);
+			circularDistance = Math.Min(linearDistance, mars.Core.Size - linearDistance);
+		} while (circularDistance < 100);
 
 		System.Console.WriteLine($"Loading {dwarf.Name} at position {warrior1Pos}");
 		mars.LoadWarrior(0, dwarf, warrior1Pos);

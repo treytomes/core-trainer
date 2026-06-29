@@ -1,5 +1,8 @@
 namespace CoreTrainer.Core;
 
+/// <summary>
+/// Represents the core memory arena where warriors battle.
+/// </summary>
 public class CoreMemory
 {
 	#region Fields
@@ -12,6 +15,9 @@ public class CoreMemory
 
 	public CoreMemory(int size = 8000)
 	{
+		if (size <= 0)
+			throw new ArgumentOutOfRangeException(nameof(size), "Core memory size must be positive");
+
 		_memory = new Instruction[size];
 
 		// Initialize with DAT instructions.
@@ -49,6 +55,9 @@ public class CoreMemory
 
 	public void Load(int startAddress, IEnumerable<Instruction> instructions)
 	{
+		if (instructions == null)
+			throw new ArgumentNullException(nameof(instructions));
+
 		var address = Normalize(startAddress);
 		foreach (var instruction in instructions)
 		{
