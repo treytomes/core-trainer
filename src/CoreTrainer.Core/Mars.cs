@@ -40,10 +40,12 @@ public class Mars
 
 	public CoreMemory Core => _core;
 	public int CurrentCycle => _currentCycle;
+	public int MaxCycles => _maxCycles;
+	public int WarriorCount => _processQueues.Length;
 
 	#endregion
 
-	#region Methods
+	#region Public Methods
 
 	public void LoadWarrior(int warriorIndex, Warrior warrior, int startAddress)
 	{
@@ -58,39 +60,99 @@ public class Mars
 		_processQueues[warriorIndex].Enqueue(startAddress);
 	}
 
+	/// <summary>
+	/// Executes a single simulation cycle (one instruction per warrior).
+	/// </summary>
+	/// <returns>The result of this cycle - Continue, or a terminal state (winner/draw/timeout).</returns>
+	public ExecutionResult StepCycle()
+	{
+		if (_currentCycle >= _maxCycles)
+			return ExecutionResult.MaxCyclesReached;
+
+		// Execute one instruction for each warrior
+		for (var i = 0; i < _processQueues.Length; i++)
+		{
+			if (_processQueues[i].Count == 0)
+				continue;
+
+			var pc = _processQueues[i].Dequeue();
+			var nextPc = ExecuteInstruction(i, pc);
+
+			if (nextPc.HasValue)
+			{
+				_processQueues[i].Enqueue(nextPc.Value);
+			}
+		}
+
+		_currentCycle++;
+
+		// Determine result after this cycle
+		return DetermineResult();
+	}
+
+	/// <summary>
+	/// Runs the complete battle until a winner is determined or max cycles reached.
+	/// </summary>
+	/// <returns>Index of winning warrior (0 or 1), or null for draw/timeout.</returns>
 	public int? Run()
 	{
 		_currentCycle = 0;
 
-		while (_currentCycle < _maxCycles)
+		while (true)
 		{
-			// Execute one instruction for each warrior.
-			for (var i = 0; i < _processQueues.Length; i++)
+			var result = StepCycle();
+
+			switch (result)
 			{
-				if (_processQueues[i].Count == 0)
+				case ExecutionResult.Warrior0Wins:
+					return 0;
+				case ExecutionResult.Warrior1Wins:
+					return 1;
+				case ExecutionResult.Draw:
+				case ExecutionResult.MaxCyclesReached:
+					return null;
+				case ExecutionResult.Continue:
 					continue;
-
-				var pc = _processQueues[i].Dequeue();
-				var nextPc = ExecuteInstruction(i, pc);
-
-				if (nextPc.HasValue)
-				{
-					_processQueues[i].Enqueue(nextPc.Value);
-				}
+				default:
+					return null;
 			}
-
-			_currentCycle++;
-
-			// Check for winner.
-			if (_processQueues[0].Count == 0 && _processQueues[1].Count > 0)
-				return 1;
-			if (_processQueues[1].Count == 0 && _processQueues[0].Count > 0)
-				return 0;
-			if (_processQueues[0].Count == 0 && _processQueues[1].Count == 0)
-				return null; // Draw
 		}
+	}
 
-		return null; // Time limit reached
+	/// <summary>
+	/// Gets a read-only view of the process queue for a specific warrior.
+	/// </summary>
+	/// <param name="warriorIndex">Index of the warrior (0-based).</param>
+	/// <returns>Read-only collection of process counters.</returns>
+	public IReadOnlyCollection<int> GetProcessQueue(int warriorIndex)
+	{
+		if (warriorIndex < 0 || warriorIndex >= _processQueues.Length)
+			throw new ArgumentOutOfRangeException(nameof(warriorIndex),
+				$"Warrior index must be between 0 and {_processQueues.Length - 1}");
+
+		return [.. _processQueues[warriorIndex]];
+	}
+
+	#endregion
+
+	#region Private Methods
+
+	/// <summary>
+	/// Determines the battle result based on current process queue states.
+	/// </summary>
+	private ExecutionResult DetermineResult()
+	{
+		var warrior0Alive = _processQueues[0].Count > 0;
+		var warrior1Alive = _processQueues[1].Count > 0;
+
+		if (!warrior0Alive && warrior1Alive)
+			return ExecutionResult.Warrior1Wins;
+		if (warrior1Alive && !warrior0Alive)
+			return ExecutionResult.Warrior0Wins;
+		if (!warrior0Alive && !warrior1Alive)
+			return ExecutionResult.Draw;
+
+		return ExecutionResult.Continue;
 	}
 
 	private int? ExecuteInstruction(int warriorIndex, int pc)
