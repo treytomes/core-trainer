@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Core Trainer is a .NET 10 Core Wars (Redcode) simulator that allows warrior programs to battle in a shared memory arena. The project implements the MARS (Memory Array Redcode Simulator) engine with support for classic Redcode instructions and addressing modes.
 
 **Current Features:**
-- Full MARS execution engine with 11 opcodes (DAT, MOV, ADD, SUB, JMP, JMZ, JMN, DJN, CMP, SPL, NOP)
+- Full MARS execution engine with 16 opcodes (DAT, MOV, ADD, SUB, MUL, DIV, MOD, JMP, JMZ, JMN, DJN, CMP, SNE, SLT, SPL, NOP)
 - Four addressing modes (Immediate, Direct, Indirect, Decrement)
 - Process queue management for multi-threaded warriors
 - Demo console application with classic warriors (Dwarf vs Imp)
@@ -163,22 +163,18 @@ SPL (split) enqueues a new process and continues current process.
 
 ## Current Limitations
 
-- Only 2 warriors supported (hardcoded in `Mars`)
-- MUL, DIV, MOD, SLT opcodes defined but not implemented
 - No validation of warrior placement (could overlap)
-- No real-time battle visualization
-- Warriors must be created programmatically (no parser)
+- Warriors must be created programmatically (no Redcode parser)
+- DIV/MOD by zero kills the executing process (ICWS-94 behavior, by design)
 
 ## Next Steps / Future Features
 
 See [.claude/journal/2026-06-29.md](.claude/journal/2026-06-29.md) for detailed next steps.
 
 **Priority items:**
-1. Implement remaining opcodes (MUL, DIV, MOD, SLT)
-2. Add Redcode parser for loading warriors from text files
-3. Create unit tests for core components
-4. Add battle visualization (ASCII or graphical)
-5. Support N warriors (not just 2)
+1. Add Redcode parser for loading warriors from text files
+2. Expand the warrior library beyond Dwarf and Imp
+3. Explore the trainable NAND-network warrior (CartesianGP) in `CoreTrainer.Networking.Nand`
 
 ## Resources
 
