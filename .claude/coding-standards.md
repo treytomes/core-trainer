@@ -9,6 +9,34 @@
 
 ## File Organization
 
+### One Type Per File
+
+**Each file should contain exactly one type (class, struct, record, interface, or enum).**
+
+- File name must match the type name exactly (e.g., `Button.cs` contains `Button` class)
+- Exception: Nested types can be in the same file as their containing type
+- Exception: Small helper types (e.g., internal records < 5 lines) closely tied to the main type
+- Enums related to a single class can be in separate files or together based on size
+
+**Example - Correct:**
+```
+Button.cs         → class Button
+Toolbar.cs        → class Toolbar
+SimulationState.cs → enum SimulationState (if large)
+```
+
+**Example - Acceptable:**
+```
+SimulationController.cs → class SimulationController + enum SimulationState (if enum is small and only used by controller)
+```
+
+**Rationale:**
+- Easier to find types (predictable file names)
+- Better IDE navigation and search
+- Clearer git history per type
+- Easier to review changes
+- Prevents "god files" with multiple related types
+
 ### Namespace and Using Statements
 
 ```csharp
