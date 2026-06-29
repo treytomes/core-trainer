@@ -1,5 +1,12 @@
 {
-  "cSpell.words": ["appsettings", "corewar", "Redcode", "Serilog", "slnx"],
+  "cSpell.words": [
+    "appsettings",
+    "corewar",
+    "Raylib",
+    "Redcode",
+    "Serilog",
+    "slnx"
+  ],
   "editor.bracketPairColorization.enabled": true,
   "editor.codeActionsOnSave": {
     "source.fixAll": "always",
