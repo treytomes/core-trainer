@@ -1,5 +1,5 @@
 {
-  "cSpell.words": ["Redcode", "slnx"],
+  "cSpell.words": ["appsettings", "corewar", "Redcode", "Serilog", "slnx"],
   "editor.bracketPairColorization.enabled": true,
   "editor.codeActionsOnSave": {
     "source.fixAll": "always",
