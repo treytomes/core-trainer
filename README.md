@@ -48,11 +48,19 @@ The execution engine that:
 
 The application uses Microsoft.Extensions.Hosting with dependency injection and Serilog for structured logging.
 
+### Key Technologies
+
+- **Microsoft.Extensions.Hosting** - Application host with dependency injection
+- **Serilog** - Structured logging to console and rolling files
+- **Spectre.Console** - Rich console UI (headless mode)
+- **Raylib-cs** - 2D graphics library (GUI mode)
+- **System.CommandLine** - Command-line argument parsing
+
 ### Key Components
 
 - **BattleService** - Orchestrates battles between warriors with proper logging
 - **WarriorFactory** - Creates classic warrior programs
-- **CoreWarsOptions** - Configuration from appsettings.json
+- **CoreWarsOptions** - Configuration from appsettings.yaml
 
 ### Configuration
 
@@ -72,35 +80,50 @@ Serilog logs to:
 - **Console** - Structured output with timestamps
 - **Rolling files** - `logs/corewar-YYYYMMDD.log` (retained for 7 days)
 
-## Running the Demo
+## Running the Simulator
 
-### Windows (Batch Scripts)
+The simulator supports two modes: **GUI mode** (default) and **Headless mode**.
 
-```batch
-# Build only
-build.bat
+### GUI Mode (Default)
 
-# Run only (builds automatically if needed)
-run.bat
-
-# Build and run
-build-and-run.bat
-```
-
-### Cross-platform (.NET CLI)
+Launches the Raylib visualizer window:
 
 ```bash
-# Build the solution
-dotnet build
+# Windows
+run.bat
 
-# Run the simulator
+# Cross-platform
 dotnet run --project src/CoreTrainer.Console/CoreTrainer.Console.csproj
 ```
 
-The demo pits two classic warriors against each other:
+The GUI window displays a placeholder. Full visualization coming soon!
+
+### Headless Mode
+
+Runs a console-based battle simulation using Spectre.Console:
+
+```bash
+# Windows
+run.bat --headless
+
+# Cross-platform
+dotnet run --project src/CoreTrainer.Console/CoreTrainer.Console.csproj -- --headless
+```
+
+The headless demo pits two classic warriors against each other:
 
 1. **Dwarf** - A "bomber" that writes DAT instructions every 4 locations
 2. **Imp** - A one-instruction warrior that copies itself forward continuously
+
+### Build Commands
+
+```batch
+# Windows
+build.bat
+
+# Cross-platform
+dotnet build core-trainer.slnx
+```
 
 ## Example Warriors
 
