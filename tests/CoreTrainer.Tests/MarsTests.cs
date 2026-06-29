@@ -24,7 +24,8 @@ public class MarsTests
 		var result = mars.StepCycle();
 
 		// Assert
-		Assert.Equal(ExecutionResult.Warrior1Wins, result);
+		Assert.Equal(ExecutionResult.Win, result);
+		Assert.Equal(1, mars.Winner);
 		Assert.Empty(mars.GetProcessQueue(0));
 		Assert.Single(mars.GetProcessQueue(1));
 	}
@@ -67,6 +68,60 @@ public class MarsTests
 		// Assert
 		Assert.Null(winner);
 		Assert.Equal(500, mars.CurrentCycle);
+	}
+
+	#endregion
+
+	#region Multiple Warriors
+
+	[Fact]
+	public void Mars_SupportsMoreThanTwoWarriors()
+	{
+		var mars = new Mars(warriorCount: 5);
+
+		Assert.Equal(5, mars.WarriorCount);
+	}
+
+	[Fact]
+	public void StepCycle_WithManyWarriors_LastSurvivorWins()
+	{
+		// Three suicides and one survivor: after one cycle only the survivor is alive.
+		Warrior Suicide(string name) =>
+			new(name, [new Instruction(OpCode.DAT, AddressingMode.Immediate, 0, AddressingMode.Immediate, 0)]);
+		var survivor = new Warrior("Survivor", [new Instruction(OpCode.JMP, AddressingMode.Direct, 0, AddressingMode.Direct, 0)]);
+
+		var mars = new Mars(warriorCount: 4);
+		mars.LoadWarrior(0, Suicide("A"), 10);
+		mars.LoadWarrior(1, Suicide("B"), 2000);
+		mars.LoadWarrior(2, survivor, 4000);
+		mars.LoadWarrior(3, Suicide("C"), 6000);
+
+		var result = mars.StepCycle();
+
+		Assert.Equal(ExecutionResult.Win, result);
+		Assert.Equal(2, mars.Winner);
+	}
+
+	[Fact]
+	public void StepCycle_WhenAllWarriorsDieSameCycle_IsDraw()
+	{
+		Warrior Suicide(string name) =>
+			new(name, [new Instruction(OpCode.DAT, AddressingMode.Immediate, 0, AddressingMode.Immediate, 0)]);
+
+		var mars = new Mars(warriorCount: 3);
+		mars.LoadWarrior(0, Suicide("A"), 10);
+		mars.LoadWarrior(1, Suicide("B"), 2000);
+		mars.LoadWarrior(2, Suicide("C"), 4000);
+
+		var result = mars.StepCycle();
+
+		Assert.Equal(ExecutionResult.Draw, result);
+	}
+
+	[Fact]
+	public void Constructor_WithZeroWarriors_Throws()
+	{
+		Assert.Throws<ArgumentOutOfRangeException>(() => new Mars(warriorCount: 0));
 	}
 
 	#endregion

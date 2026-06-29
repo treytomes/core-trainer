@@ -37,11 +37,17 @@ public static class Program
 				description: "Run in headless mode (console battle simulation without GUI)",
 				getDefaultValue: () => false);
 
-			rootCommand.AddOption(headlessOption);
+			var battleOption = new Option<FileInfo?>(
+				name: "--battle",
+				description: "Path to a battle roster file (defaults to battle.yaml beside the executable)",
+				getDefaultValue: () => null);
 
-			rootCommand.SetHandler((headless) =>
+			rootCommand.AddOption(headlessOption);
+			rootCommand.AddOption(battleOption);
+
+			rootCommand.SetHandler((headless, battleFile) =>
 			{
-				var host = CreateHostBuilder(args).Build();
+				var host = CreateHostBuilder(args, battleFile).Build();
 
 				if (headless)
 				{
@@ -55,7 +61,7 @@ public static class Program
 				}
 
 				Log.Information("Core Wars Simulator completed successfully");
-			}, headlessOption);
+			}, headlessOption, battleOption);
 
 			return rootCommand.Invoke(args);
 		}
@@ -70,7 +76,7 @@ public static class Program
 		}
 	}
 
-	private static IHostBuilder CreateHostBuilder(string[] args) =>
+	private static IHostBuilder CreateHostBuilder(string[] args, FileInfo? battleFile) =>
 		Host.CreateDefaultBuilder(args)
 			.UseSerilog((context, services, configuration) => configuration
 				.ReadFrom.Configuration(context.Configuration)
@@ -81,6 +87,17 @@ public static class Program
 				config.SetBasePath(AppContext.BaseDirectory);
 				config.AddYamlFile("appsettings.yaml", optional: false, reloadOnChange: true);
 				config.AddYamlFile("colorscheme.yaml", optional: true, reloadOnChange: true);
+
+				// The battle roster: the user-supplied file if given (required to exist),
+				// otherwise the default battle.yaml beside the executable.
+				if (battleFile is not null)
+				{
+					config.AddYamlFile(battleFile.FullName, optional: false, reloadOnChange: false);
+				}
+				else
+				{
+					config.AddYamlFile("battle.yaml", optional: true, reloadOnChange: true);
+				}
 			})
 			.ConfigureServices((context, services) =>
 			{
@@ -89,13 +106,44 @@ public static class Program
 				services.Configure<WindowOptions>(context.Configuration.GetSection("Window"));
 
 				// Bind the color scheme (colorscheme.yaml is optional; falls back to defaults)
-				var colorSchemeData = context.Configuration.Get<ColorSchemeData>() ?? new ColorSchemeData();
+				var colorSchemeData = context.Configuration.GetSection("ColorScheme").Get<ColorSchemeData>() ?? new ColorSchemeData();
 				services.AddSingleton(new ColorScheme(colorSchemeData));
+
+				// Bind the battle roster from its section.
+				var battleConfig = context.Configuration.GetSection("Battle").Get<BattleConfig>() ?? new BattleConfig();
+				services.AddSingleton(battleConfig);
 
 				// Register services
 				services.AddSingleton<IWarriorFactory, WarriorFactory>();
 				services.AddSingleton<BattleService>();
 			});
+
+	/// <summary>
+	/// Builds the warrior roster from the battle configuration, falling back to a
+	/// default Dwarf-vs-Imp matchup when the roster is empty.
+	/// </summary>
+	private static List<Warrior> BuildRoster(BattleConfig battleConfig, IWarriorFactory factory)
+	{
+		var entries = battleConfig.Warriors;
+		if (entries.Count == 0)
+		{
+			Log.Warning("Battle roster is empty; falling back to a default Dwarf vs Imp matchup");
+			return [factory.CreateDwarf(), factory.CreateImp()];
+		}
+
+		var roster = new List<Warrior>(entries.Count);
+		foreach (var entry in entries)
+		{
+			var warrior = factory.Create(entry.Archetype);
+			if (!string.IsNullOrWhiteSpace(entry.Name))
+			{
+				warrior = new Warrior(entry.Name, warrior.Instructions);
+			}
+			roster.Add(warrior);
+		}
+
+		return roster;
+	}
 
 	private static void RunHeadlessBattle(IServiceProvider services)
 	{
@@ -108,10 +156,11 @@ public static class Program
 
 		var battleService = services.GetRequiredService<BattleService>();
 		var warriorFactory = services.GetRequiredService<IWarriorFactory>();
+		var battleConfig = services.GetRequiredService<BattleConfig>();
 
-		// Create warriors using factory
-		var dwarf = warriorFactory.CreateDwarf();
-		var imp = warriorFactory.CreateImp();
+		// Build the roster from the battle configuration
+		var roster = BuildRoster(battleConfig, warriorFactory);
+		AnsiConsole.MarkupLine($"[dim]Roster ({roster.Count}):[/] {string.Join(", ", roster.Select(w => w.Name))}\n");
 
 		// Run the battle with visual feedback
 		var winner = AnsiConsole.Status()
@@ -121,13 +170,13 @@ public static class Program
 			{
 				ctx.Status("[yellow]Loading warriors...[/]");
 				ctx.Status("[yellow]Starting battle simulation...[/]");
-				return battleService.RunBattle(dwarf, imp);
+				return battleService.RunBattle(roster);
 			});
 
 		// Display result with styling
 		AnsiConsole.WriteLine();
 		var resultPanel = winner.HasValue
-			? new Panel($"[bold green]Winner:[/] [yellow]{(winner.Value == 0 ? dwarf.Name : imp.Name)}[/]")
+			? new Panel($"[bold green]Winner:[/] [yellow]{roster[winner.Value].Name}[/]")
 				.Border(BoxBorder.Double)
 				.BorderColor(Spectre.Console.Color.Green)
 			: new Panel("[bold yellow]Result: Draw[/]")
@@ -143,6 +192,12 @@ public static class Program
 		var coreWarsOptions = services.GetRequiredService<IOptions<CoreWarsOptions>>().Value;
 		var colorScheme = services.GetRequiredService<ColorScheme>();
 		var warriorFactory = services.GetRequiredService<IWarriorFactory>();
+		var battleConfig = services.GetRequiredService<BattleConfig>();
+
+		// Build the roster from the battle configuration and a matching color palette.
+		var roster = BuildRoster(battleConfig, warriorFactory);
+		var random = new Random();
+		var palette = new WarriorPalette(roster.Count, random);
 
 		Raylib.InitWindow(windowOptions.Width, windowOptions.Height, windowOptions.Title);
 		Raylib.SetTargetFPS(windowOptions.TargetFPS);
@@ -156,7 +211,19 @@ public static class Program
 		// Create the core grid renderer, sized to the configured core so no address
 		// can map outside the grid, and positioned below the toolbar.
 		var gridConfig = GridConfig.ForCoreSize(coreWarsOptions.CoreSize, offsetY: 80);
-		var coreRenderer = new CoreRenderer(colorScheme, gridConfig);
+		var coreRenderer = new CoreRenderer(colorScheme, palette, gridConfig);
+
+		// Loads the roster at freshly-chosen separated positions. Reused by Reset.
+		void InitializeBattle()
+		{
+			var positions = WarriorPlacement.GetSeparatedPositions(
+				coreWarsOptions.CoreSize, roster.Count, coreWarsOptions.MinWarriorSeparation, random);
+			simController.Initialize(
+				roster, positions,
+				coreWarsOptions.CoreSize, coreWarsOptions.MaxCycles, coreWarsOptions.MaxProcesses);
+			Log.Information("Battle initialized with {Count} warriors: {Names}",
+				roster.Count, string.Join(", ", roster.Select(w => w.Name)));
+		}
 
 		// Build the UI tree. The root carries the theme; all descendants inherit it.
 		var root = new RootContainer(windowOptions.Width, windowOptions.Height, colorScheme);
@@ -184,18 +251,8 @@ public static class Program
 
 		var shouldClose = false;
 
-		// Initialize a battle using the configured core parameters and shared placement logic
-		var dwarf = warriorFactory.CreateDwarf();
-		var imp = warriorFactory.CreateImp();
-		var random = new Random();
-		var warrior0Start = random.Next(coreWarsOptions.CoreSize);
-		var warrior1Start = WarriorPlacement.GetSeparatedPosition(
-			coreWarsOptions.CoreSize, warrior0Start, coreWarsOptions.MinWarriorSeparation, random);
-
-		simController.Initialize(
-			dwarf, imp, warrior0Start, warrior1Start,
-			coreWarsOptions.CoreSize, coreWarsOptions.MaxCycles, coreWarsOptions.MaxProcesses);
-		Log.Information("Simulation initialized: Dwarf at {W0}, Imp at {W1}", warrior0Start, warrior1Start);
+		// Initialize the battle from the roster
+		InitializeBattle();
 
 		// Subscribe to button click events
 		var subscriptions = new List<IDisposable>
@@ -217,9 +274,8 @@ public static class Program
 			{
 				Log.Information("Reset button clicked");
 				simController.Reset();
-				simController.Initialize(
-					dwarf, imp, warrior0Start, warrior1Start,
-					coreWarsOptions.CoreSize, coreWarsOptions.MaxCycles, coreWarsOptions.MaxProcesses);
+				InitializeBattle();
+				runPauseButton.Text = "Run";
 			}),
 
 			speedDownButton.Clicked.Subscribe(_ =>
@@ -270,25 +326,29 @@ public static class Program
 
 			if (simController.Mars != null)
 			{
-				Raylib.DrawText($"Cycle: {simController.Mars.CurrentCycle}", 20, statusY, 20, statusColor);
+				var mars = simController.Mars;
+				Raylib.DrawText($"Cycle: {mars.CurrentCycle}", 20, statusY, 20, statusColor);
 				Raylib.DrawText($"State: {simController.State}", 20, statusY + 30, 20, statusColor);
 
-				var warrior0Processes = simController.Mars.GetProcessQueue(0).Count;
-				var warrior1Processes = simController.Mars.GetProcessQueue(1).Count;
-				Raylib.DrawText($"Dwarf Processes: {warrior0Processes}", 20, statusY + 60, 20, statusColor);
-				Raylib.DrawText($"Imp Processes: {warrior1Processes}", 20, statusY + 90, 20, statusColor);
+				// Per-warrior process counts, each labeled in its palette color.
+				var lineY = statusY + 60;
+				for (var i = 0; i < roster.Count; i++)
+				{
+					var processes = mars.GetProcessQueue(i).Count;
+					Raylib.DrawText($"{roster[i].Name}: {processes}", 20, lineY, 18, palette.GetColor(i));
+					lineY += 24;
+				}
 
 				if (simController.State == SimulationState.Finished)
 				{
 					var result = simController.LastResult switch
 					{
-						ExecutionResult.Warrior0Wins => "Dwarf Wins!",
-						ExecutionResult.Warrior1Wins => "Imp Wins!",
+						ExecutionResult.Win => $"{roster[mars.Winner].Name} Wins!",
 						ExecutionResult.Draw => "Draw",
 						ExecutionResult.MaxCyclesReached => "Time Limit Reached",
 						_ => "Unknown"
 					};
-					Raylib.DrawText($"Result: {result}", 20, statusY + 120, 24, Raylib_cs.Color.Yellow);
+					Raylib.DrawText($"Result: {result}", 20, lineY + 10, 24, Raylib_cs.Color.Yellow);
 				}
 			}
 

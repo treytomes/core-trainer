@@ -24,11 +24,6 @@ public class ColorSchemeData
 	/// UI element colors.
 	/// </summary>
 	public UIColors UI { get; set; } = new();
-
-	/// <summary>
-	/// Warrior-specific colors.
-	/// </summary>
-	public WarriorColors Warriors { get; set; } = new();
 }
 
 public class BackgroundColors
@@ -55,12 +50,6 @@ public class UIColors
 	public ColorData TextSecondary { get; set; } = new(140, 140, 140, 255);
 	public ColorData ButtonHover { get; set; } = new(50, 50, 50, 255);
 	public ColorData ButtonPressed { get; set; } = new(70, 70, 70, 255);
-}
-
-public class WarriorColors
-{
-	public ColorData Warrior0 { get; set; } = new(255, 68, 68, 255);
-	public ColorData Warrior1 { get; set; } = new(68, 68, 255, 255);
 }
 
 /// <summary>

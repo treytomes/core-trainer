@@ -8,6 +8,19 @@ namespace CoreTrainer.Console;
 public class WarriorFactory : IWarriorFactory
 {
 	/// <summary>
+	/// Creates a warrior for the given archetype.
+	/// </summary>
+	/// <param name="archetype">Which built-in warrior to create.</param>
+	/// <returns>A new warrior instance.</returns>
+	/// <exception cref="ArgumentOutOfRangeException">The archetype is not recognized.</exception>
+	public Warrior Create(WarriorArchetype archetype) => archetype switch
+	{
+		WarriorArchetype.Dwarf => CreateDwarf(),
+		WarriorArchetype.Imp => CreateImp(),
+		_ => throw new ArgumentOutOfRangeException(nameof(archetype), archetype, "Unknown warrior archetype")
+	};
+
+	/// <summary>
 	/// Creates the Dwarf warrior - a bomber that writes DAT instructions every 4 locations.
 	/// </summary>
 	public Warrior CreateDwarf()
@@ -36,4 +49,3 @@ public class WarriorFactory : IWarriorFactory
 		return new Warrior("Imp", instructions);
 	}
 }
-

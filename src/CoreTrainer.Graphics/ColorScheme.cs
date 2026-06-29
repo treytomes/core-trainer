@@ -44,16 +44,6 @@ public class ColorScheme
 	/// </summary>
 	public Color Empty => ToRaylibColor(_data.MemoryCells.Empty);
 
-	/// <summary>
-	/// Warrior 0 code (red).
-	/// </summary>
-	public Color Warrior0 => ToRaylibColor(_data.Warriors.Warrior0);
-
-	/// <summary>
-	/// Warrior 1 code (blue).
-	/// </summary>
-	public Color Warrior1 => ToRaylibColor(_data.Warriors.Warrior1);
-
 	#endregion
 
 	#region Execution Indicators
@@ -100,21 +90,6 @@ public class ColorScheme
 	#endregion
 
 	#region Public Methods
-
-	/// <summary>
-	/// Gets the color for a specific warrior by index.
-	/// </summary>
-	/// <param name="warriorIndex">Warrior index (0, 1, etc.).</param>
-	/// <returns>Color for the warrior.</returns>
-	public Color GetWarriorColor(int warriorIndex)
-	{
-		return warriorIndex switch
-		{
-			0 => Warrior0,
-			1 => Warrior1,
-			_ => Empty
-		};
-	}
 
 	/// <summary>
 	/// Creates a faded version of a color by adjusting alpha.

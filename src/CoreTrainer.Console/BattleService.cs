@@ -27,40 +27,35 @@ public class BattleService
 	#region Methods
 
 	/// <summary>
-	/// Runs a battle between two warriors.
+	/// Runs a battle between any number of warriors.
 	/// </summary>
-	/// <param name="warrior1">First warrior.</param>
-	/// <param name="warrior2">Second warrior.</param>
-	/// <returns>Index of winning warrior (0 or 1), or null for draw.</returns>
-	public int? RunBattle(Warrior warrior1, Warrior warrior2)
+	/// <param name="warriors">The warriors to load, in order.</param>
+	/// <returns>Index of the winning warrior, or null for a draw / time limit.</returns>
+	public int? RunBattle(IReadOnlyList<Warrior> warriors)
 	{
-		_logger.LogInformation("Initializing battle between {Warrior1} and {Warrior2}",
-			warrior1.Name, warrior2.Name);
+		ArgumentNullException.ThrowIfNull(warriors);
+		if (warriors.Count == 0)
+			throw new ArgumentException("At least one warrior is required.", nameof(warriors));
 
-		// Create MARS
+		_logger.LogInformation("Initializing battle between {WarriorCount} warriors: {Names}",
+			warriors.Count, string.Join(", ", warriors.Select(w => w.Name)));
+
 		var mars = new Mars(
 			coreSize: _options.CoreSize,
 			maxCycles: _options.MaxCycles,
-			maxProcesses: _options.MaxProcesses);
+			maxProcesses: _options.MaxProcesses,
+			warriorCount: warriors.Count);
 
-		// Calculate starting positions with proper circular separation
-		var warrior1Pos = _random.Next(mars.Core.Size);
-		var warrior2Pos = WarriorPlacement.GetSeparatedPosition(
-			mars.Core.Size, warrior1Pos, _options.MinWarriorSeparation, _random);
+		// Choose separated starting positions for all warriors, then load each.
+		var positions = WarriorPlacement.GetSeparatedPositions(
+			mars.Core.Size, warriors.Count, _options.MinWarriorSeparation, _random);
 
-		_logger.LogInformation("Loading {Warrior1} at position {Position1}", warrior1.Name, warrior1Pos);
-		mars.LoadWarrior(0, warrior1, warrior1Pos);
+		for (var i = 0; i < warriors.Count; i++)
+		{
+			_logger.LogInformation("Loading {Warrior} at position {Position}", warriors[i].Name, positions[i]);
+			mars.LoadWarrior(i, warriors[i], positions[i]);
+		}
 
-		_logger.LogInformation("Loading {Warrior2} at position {Position2}", warrior2.Name, warrior2Pos);
-		mars.LoadWarrior(1, warrior2, warrior2Pos);
-
-		// Calculate circular distance for logging
-		var linearDistance = Math.Abs(warrior1Pos - warrior2Pos);
-		var circularDistance = Math.Min(linearDistance, mars.Core.Size - linearDistance);
-		_logger.LogDebug("Warrior separation: {CircularDistance} cells (linear: {LinearDistance})",
-			circularDistance, linearDistance);
-
-		// Run the battle
 		_logger.LogInformation("Starting battle (max {MaxCycles} cycles, max {MaxProcesses} processes per warrior)",
 			_options.MaxCycles, _options.MaxProcesses);
 
@@ -70,8 +65,7 @@ public class BattleService
 
 		if (winner.HasValue)
 		{
-			var winnerName = winner.Value == 0 ? warrior1.Name : warrior2.Name;
-			_logger.LogInformation("Winner: {Winner}", winnerName);
+			_logger.LogInformation("Winner: {Winner}", warriors[winner.Value].Name);
 		}
 		else
 		{

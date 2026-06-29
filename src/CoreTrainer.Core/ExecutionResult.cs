@@ -11,17 +11,13 @@ public enum ExecutionResult
 	Continue,
 
 	/// <summary>
-	/// Warrior 0 has won the battle.
+	/// Exactly one warrior remains alive and has won. The winning warrior's index is
+	/// available from <see cref="Mars.Winner"/>.
 	/// </summary>
-	Warrior0Wins,
+	Win,
 
 	/// <summary>
-	/// Warrior 1 has won the battle.
-	/// </summary>
-	Warrior1Wins,
-
-	/// <summary>
-	/// Both warriors are dead (draw).
+	/// All warriors died in the same cycle (draw).
 	/// </summary>
 	Draw,
 

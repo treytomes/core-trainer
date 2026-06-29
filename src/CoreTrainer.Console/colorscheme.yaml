@@ -1,62 +1,60 @@
 # Core Wars Visualizer Color Scheme
 # RGBA values (0-255)
+ColorScheme:
+  Background:
+    Main:
+      R: 20
+      G: 20
+      B: 20
+      A: 255
+    GridLine:
+      R: 40
+      G: 40
+      B: 40
+      A: 255
 
-Background:
-  Main:
-    R: 20
-    G: 20
-    B: 20
-    A: 255
-  GridLine:
-    R: 40
-    G: 40
-    B: 40
-    A: 255
+  MemoryCells:
+    Empty:
+      R: 26
+      G: 26
+      B: 26
+      A: 255
 
-MemoryCells:
-  Empty:
-    R: 26
-    G: 26
-    B: 26
-    A: 255
+  Execution:
+    Current:
+      R: 255
+      G: 255
+      B: 0
+      A: 255
+    ProcessMarker:
+      R: 255
+      G: 255
+      B: 255
+      A: 200
 
-Execution:
-  Current:
-    R: 255
-    G: 255
-    B: 0
-    A: 255
-  ProcessMarker:
-    R: 255
-    G: 255
-    B: 255
-    A: 200
-
-UI:
-  PanelBackground:
-    R: 30
-    G: 30
-    B: 30
-    A: 255
-  TextPrimary:
-    R: 220
-    G: 220
-    B: 220
-    A: 255
-  TextSecondary:
-    R: 140
-    G: 140
-    B: 140
-    A: 255
-
-Warriors:
-  Warrior0:
-    R: 255
-    G: 68
-    B: 68
-    A: 255
-  Warrior1:
-    R: 68
-    G: 68
-    B: 255
-    A: 255
+  UI:
+    PanelBackground:
+      R: 30
+      G: 30
+      B: 30
+      A: 255
+    TextPrimary:
+      R: 220
+      G: 220
+      B: 220
+      A: 255
+    TextSecondary:
+      R: 140
+      G: 140
+      B: 140
+      A: 255
+    ButtonHover:
+      R: 50
+      G: 50
+      B: 50
+      A: 255
+    ButtonPressed:
+      R: 70
+      G: 70
+      B: 70
+      A: 255

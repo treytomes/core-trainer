@@ -18,22 +18,27 @@ public class Mars
 	private readonly int _maxCycles;
 	private readonly int _maxProcesses;
 	private int _currentCycle;
+	private int _winner = NoOwner;
 
 	#endregion
 
 	#region Constructors
 
-	public Mars(int coreSize = 8000, int maxCycles = 80000, int maxProcesses = 8000)
+	public Mars(int coreSize = 8000, int maxCycles = 80000, int maxProcesses = 8000, int warriorCount = 2)
 	{
 		if (maxCycles <= 0)
 			throw new ArgumentOutOfRangeException(nameof(maxCycles), "Max cycles must be positive");
 		if (maxProcesses <= 0)
 			throw new ArgumentOutOfRangeException(nameof(maxProcesses), "Max processes must be positive");
+		if (warriorCount < 1)
+			throw new ArgumentOutOfRangeException(nameof(warriorCount), "Warrior count must be at least 1");
 
 		_core = new CoreMemory(coreSize);
-		_processQueues = new Queue<int>[2];
-		_processQueues[0] = new Queue<int>();
-		_processQueues[1] = new Queue<int>();
+		_processQueues = new Queue<int>[warriorCount];
+		for (var i = 0; i < warriorCount; i++)
+		{
+			_processQueues[i] = new Queue<int>();
+		}
 		_cellOwners = new int[_core.Size];
 		Array.Fill(_cellOwners, NoOwner);
 		_maxCycles = maxCycles;
@@ -50,6 +55,12 @@ public class Mars
 	public int CurrentCycle => _currentCycle;
 	public int MaxCycles => _maxCycles;
 	public int WarriorCount => _processQueues.Length;
+
+	/// <summary>
+	/// Index of the winning warrior once a battle ends in a win, or <see cref="NoOwner"/>
+	/// if no single warrior has won (still running, draw, or timeout).
+	/// </summary>
+	public int Winner => _winner;
 
 	#endregion
 
@@ -126,7 +137,7 @@ public class Mars
 	/// <summary>
 	/// Runs the complete battle until a winner is determined or max cycles reached.
 	/// </summary>
-	/// <returns>Index of winning warrior (0 or 1), or null for draw/timeout.</returns>
+	/// <returns>Index of the winning warrior, or null for draw/timeout.</returns>
 	public int? Run()
 	{
 		_currentCycle = 0;
@@ -137,10 +148,8 @@ public class Mars
 
 			switch (result)
 			{
-				case ExecutionResult.Warrior0Wins:
-					return 0;
-				case ExecutionResult.Warrior1Wins:
-					return 1;
+				case ExecutionResult.Win:
+					return _winner;
 				case ExecutionResult.Draw:
 				case ExecutionResult.MaxCyclesReached:
 					return null;
@@ -171,19 +180,33 @@ public class Mars
 	#region Private Methods
 
 	/// <summary>
-	/// Determines the battle result based on current process queue states.
+	/// Determines the battle result based on current process queue states:
+	/// exactly one warrior alive is a win, zero alive is a draw, otherwise continue.
 	/// </summary>
 	private ExecutionResult DetermineResult()
 	{
-		var warrior0Alive = _processQueues[0].Count > 0;
-		var warrior1Alive = _processQueues[1].Count > 0;
+		var aliveCount = 0;
+		var lastAlive = NoOwner;
 
-		if (!warrior0Alive && warrior1Alive)
-			return ExecutionResult.Warrior1Wins;
-		if (warrior1Alive && !warrior0Alive)
-			return ExecutionResult.Warrior0Wins;
-		if (!warrior0Alive && !warrior1Alive)
+		for (var i = 0; i < _processQueues.Length; i++)
+		{
+			if (_processQueues[i].Count > 0)
+			{
+				aliveCount++;
+				lastAlive = i;
+			}
+		}
+
+		if (aliveCount == 0)
 			return ExecutionResult.Draw;
+
+		// A single survivor wins only when there were rivals to begin with. With one
+		// warrior loaded, it never "wins" — the battle runs to the cycle limit.
+		if (aliveCount == 1 && _processQueues.Length > 1)
+		{
+			_winner = lastAlive;
+			return ExecutionResult.Win;
+		}
 
 		return ExecutionResult.Continue;
 	}

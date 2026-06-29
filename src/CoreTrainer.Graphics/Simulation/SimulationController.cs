@@ -10,8 +10,6 @@ public class SimulationController
 	#region Fields
 
 	private Mars? _mars;
-	private int _warrior0StartAddress;
-	private int _warrior1StartAddress;
 	private float _cycleAccumulator;
 
 	#endregion
@@ -34,16 +32,6 @@ public class SimulationController
 	public Mars? Mars => _mars;
 
 	/// <summary>
-	/// Starting address of warrior 0.
-	/// </summary>
-	public int Warrior0StartAddress => _warrior0StartAddress;
-
-	/// <summary>
-	/// Starting address of warrior 1.
-	/// </summary>
-	public int Warrior1StartAddress => _warrior1StartAddress;
-
-	/// <summary>
 	/// Current state of the simulation.
 	/// </summary>
 	public SimulationState State { get; private set; }
@@ -63,30 +51,33 @@ public class SimulationController
 	#region Public Methods
 
 	/// <summary>
-	/// Initializes a new battle with the given warriors.
+	/// Initializes a new battle with the given warriors and their starting positions.
 	/// </summary>
-	/// <param name="warrior0">First warrior.</param>
-	/// <param name="warrior1">Second warrior.</param>
-	/// <param name="warrior0Start">Starting address for warrior 0.</param>
-	/// <param name="warrior1Start">Starting address for warrior 1.</param>
+	/// <param name="warriors">The warriors to load, in order.</param>
+	/// <param name="startAddresses">Starting address for each warrior (parallel to <paramref name="warriors"/>).</param>
 	/// <param name="coreSize">Core memory size.</param>
 	/// <param name="maxCycles">Maximum cycles.</param>
 	/// <param name="maxProcesses">Maximum processes per warrior.</param>
 	public void Initialize(
-		Warrior warrior0,
-		Warrior warrior1,
-		int warrior0Start,
-		int warrior1Start,
+		IReadOnlyList<Warrior> warriors,
+		IReadOnlyList<int> startAddresses,
 		int coreSize = 8000,
 		int maxCycles = 80000,
 		int maxProcesses = 8000)
 	{
-		_mars = new Mars(coreSize, maxCycles, maxProcesses);
-		_mars.LoadWarrior(0, warrior0, warrior0Start);
-		_mars.LoadWarrior(1, warrior1, warrior1Start);
+		ArgumentNullException.ThrowIfNull(warriors);
+		ArgumentNullException.ThrowIfNull(startAddresses);
+		if (warriors.Count == 0)
+			throw new ArgumentException("At least one warrior is required.", nameof(warriors));
+		if (warriors.Count != startAddresses.Count)
+			throw new ArgumentException("Each warrior must have exactly one start address.", nameof(startAddresses));
 
-		_warrior0StartAddress = warrior0Start;
-		_warrior1StartAddress = warrior1Start;
+		_mars = new Mars(coreSize, maxCycles, maxProcesses, warriors.Count);
+		for (var i = 0; i < warriors.Count; i++)
+		{
+			_mars.LoadWarrior(i, warriors[i], startAddresses[i]);
+		}
+
 		_cycleAccumulator = 0f;
 
 		State = SimulationState.Paused;

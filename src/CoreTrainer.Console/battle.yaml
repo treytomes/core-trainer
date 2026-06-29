@@ -1,0 +1,13 @@
+# Battle roster: the warriors loaded into the simulation, in order.
+# Each entry needs an Archetype (Dwarf or Imp) and an optional Name.
+# Override this file at runtime with: --battle <path>
+Battle:
+  Warriors:
+    - Archetype: Dwarf
+      Name: Dwarf Alpha
+    - Archetype: Imp
+      Name: Imp Alpha
+    - Archetype: Dwarf
+      Name: Dwarf Beta
+    - Archetype: Imp
+      Name: Imp Beta

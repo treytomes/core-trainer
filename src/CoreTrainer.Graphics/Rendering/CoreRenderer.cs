@@ -12,15 +12,18 @@ public class CoreRenderer
 
 	private readonly GridConfig _gridConfig;
 	private readonly ColorScheme _colorScheme;
+	private readonly WarriorPalette _palette;
 
 	#endregion
 
 	#region Constructors
 
-	public CoreRenderer(ColorScheme colorScheme, GridConfig? gridConfig = null)
+	public CoreRenderer(ColorScheme colorScheme, WarriorPalette palette, GridConfig? gridConfig = null)
 	{
 		ArgumentNullException.ThrowIfNull(colorScheme);
+		ArgumentNullException.ThrowIfNull(palette);
 		_colorScheme = colorScheme;
+		_palette = palette;
 		_gridConfig = gridConfig ?? new GridConfig();
 	}
 
@@ -45,7 +48,7 @@ public class CoreRenderer
 		{
 			var (x, y) = _gridConfig.AddressToScreen(address);
 			var owner = mars.GetCellOwner(address);
-			var color = owner == Mars.NoOwner ? _colorScheme.Empty : _colorScheme.GetWarriorColor(owner);
+			var color = owner == Mars.NoOwner ? _colorScheme.Empty : _palette.GetColor(owner);
 
 			Raylib.DrawRectangle(x, y, _gridConfig.CellSize, _gridConfig.CellSize, color);
 		}
@@ -63,7 +66,6 @@ public class CoreRenderer
 		for (var warriorIndex = 0; warriorIndex < mars.WarriorCount; warriorIndex++)
 		{
 			var processes = mars.GetProcessQueue(warriorIndex);
-			var color = _colorScheme.GetWarriorColor(warriorIndex);
 
 			foreach (var pc in processes)
 			{
