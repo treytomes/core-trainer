@@ -2,5 +2,6 @@
   <Folder Name="/src/">
     <Project Path="src/CoreTrainer.Console/CoreTrainer.Console.csproj" />
     <Project Path="src/CoreTrainer.Core/CoreTrainer.Core.csproj" />
+    <Project Path="src/CoreTrainer.Graphics/CoreTrainer.Graphics.csproj" />
   </Folder>
 </Solution>
