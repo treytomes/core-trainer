@@ -5,7 +5,7 @@ public enum AddressingMode
 	/// <summary>
 	/// # - The value itself
 	/// </summary>
-	Immediate,
+	Immediate = 0,
 
 	/// <summary>
 	/// $ - The address

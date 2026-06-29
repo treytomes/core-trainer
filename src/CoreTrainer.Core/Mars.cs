@@ -251,6 +251,45 @@ public class Mars
 					return _core.Normalize(pc + 1);
 				}
 
+			case OpCode.MUL:
+				{
+					var aAddr = ResolveAddress(warriorIndex, pc, instruction.AMode, instruction.AValue);
+					var bAddr = ResolveAddress(warriorIndex, pc, instruction.BMode, instruction.BValue);
+					var aInst = _core.Read(aAddr);
+					var bInst = _core.Read(bAddr);
+					var result = bInst with { BValue = bInst.BValue * aInst.BValue };
+					WriteOwned(warriorIndex, bAddr, result);
+					return _core.Normalize(pc + 1);
+				}
+
+			case OpCode.DIV:
+				{
+					var aAddr = ResolveAddress(warriorIndex, pc, instruction.AMode, instruction.AValue);
+					var bAddr = ResolveAddress(warriorIndex, pc, instruction.BMode, instruction.BValue);
+					var aInst = _core.Read(aAddr);
+					var bInst = _core.Read(bAddr);
+					// Division by zero kills the process (ICWS-94).
+					if (aInst.BValue == 0)
+						return null;
+					var result = bInst with { BValue = bInst.BValue / aInst.BValue };
+					WriteOwned(warriorIndex, bAddr, result);
+					return _core.Normalize(pc + 1);
+				}
+
+			case OpCode.MOD:
+				{
+					var aAddr = ResolveAddress(warriorIndex, pc, instruction.AMode, instruction.AValue);
+					var bAddr = ResolveAddress(warriorIndex, pc, instruction.BMode, instruction.BValue);
+					var aInst = _core.Read(aAddr);
+					var bInst = _core.Read(bAddr);
+					// Modulo by zero kills the process (ICWS-94).
+					if (aInst.BValue == 0)
+						return null;
+					var result = bInst with { BValue = bInst.BValue % aInst.BValue };
+					WriteOwned(warriorIndex, bAddr, result);
+					return _core.Normalize(pc + 1);
+				}
+
 			case OpCode.JMP:
 				{
 					var aAddr = ResolveAddress(warriorIndex, pc, instruction.AMode, instruction.AValue);
@@ -296,6 +335,28 @@ public class Mars
 					var aInst = _core.Read(aAddr);
 					var bInst = _core.Read(bAddr);
 					if (aInst.Equals(bInst))
+						return _core.Normalize(pc + 2); // Skip next instruction
+					return _core.Normalize(pc + 1);
+				}
+
+			case OpCode.SNE:
+				{
+					var aAddr = ResolveAddress(warriorIndex, pc, instruction.AMode, instruction.AValue);
+					var bAddr = ResolveAddress(warriorIndex, pc, instruction.BMode, instruction.BValue);
+					var aInst = _core.Read(aAddr);
+					var bInst = _core.Read(bAddr);
+					if (!aInst.Equals(bInst))
+						return _core.Normalize(pc + 2); // Skip next instruction
+					return _core.Normalize(pc + 1);
+				}
+
+			case OpCode.SLT:
+				{
+					var aAddr = ResolveAddress(warriorIndex, pc, instruction.AMode, instruction.AValue);
+					var bAddr = ResolveAddress(warriorIndex, pc, instruction.BMode, instruction.BValue);
+					var aInst = _core.Read(aAddr);
+					var bInst = _core.Read(bAddr);
+					if (aInst.BValue < bInst.BValue)
 						return _core.Normalize(pc + 2); // Skip next instruction
 					return _core.Normalize(pc + 1);
 				}

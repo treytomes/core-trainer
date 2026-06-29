@@ -63,6 +63,11 @@ public enum OpCode
 	CMP,
 
 	/// <summary>
+	/// Skip if Not Equal - Skips next instruction if A does not equal B (ICWS-94).
+	/// </summary>
+	SNE,
+
+	/// <summary>
 	/// Skip if Less Than
 	/// </summary>
 	SLT,
