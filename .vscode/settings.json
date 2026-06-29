@@ -1,0 +1,47 @@
+{
+  "cSpell.words": ["Redcode", "slnx"],
+  "editor.bracketPairColorization.enabled": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll": "always",
+    "source.fixAll.eslint": "always",
+    "source.addMissingImports": "always"
+  },
+  "editor.detectIndentation": false,
+  "editor.formatOnSave": true,
+  "editor.formatOnType": true,
+  "editor.guides.bracketPairs": true,
+  "editor.insertSpaces": false,
+  "editor.minimap.enabled": true,
+  "editor.renderWhitespace": "all",
+  "editor.rulers": [100],
+  "editor.tabSize": 4,
+  "files.insertFinalNewline": true,
+  "files.trimFinalNewlines": true,
+  "files.trimTrailingWhitespace": true,
+  "csharp.debug.expressionEvaluationOptions.allowImplicitFuncEval": true,
+  "csharp.format.enable": true,
+  "csharp.semanticHighlighting.enabled": true,
+  "omnisharp.enableEditorConfigSupport": true,
+  // C# Dev Kit formatting settings
+  "[csharp]": {
+    "editor.defaultFormatter": "ms-dotnettools.csharp",
+    "editor.codeActionsOnSave": {
+      "source.fixAll": "always"
+    }
+  },
+  // Test Explorer settings
+  "dotnet-test-explorer.testProjectPath": "**/*Tests.csproj",
+  // Removed testArguments - using coverlet.collector package instead
+  // Code coverage is collected via the coverlet.collector NuGet package
+  "dotnet.unitTests.runSettingsPath": "",
+  // C# extension test settings - use the modern test runner
+  "dotnet.test.runInParallel": false,
+  // Coverage Gutters settings (optional - for visualizing coverage in editor)
+  "coverage-gutters.coverageFileNames": [
+    "**/TestResults/**/coverage.cobertura.xml"
+  ],
+  "coverage-gutters.showLineCoverage": true,
+  "coverage-gutters.showRulerCoverage": true,
+  "coverage-gutters.highlightdark": "rgba(45, 121, 10, 0.5)",
+  "coverage-gutters.noHighlightDark": "rgba(121, 31, 10, 0.5)"
+}

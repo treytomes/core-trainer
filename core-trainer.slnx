@@ -1,0 +1,6 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/CoreTrainer.Console/CoreTrainer.Console.csproj" />
+    <Project Path="src/CoreTrainer.Core/CoreTrainer.Core.csproj" />
+  </Folder>
+</Solution>
