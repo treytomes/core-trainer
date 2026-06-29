@@ -21,6 +21,7 @@
 	<ItemGroup>
 		<ProjectReference Include="..\..\src\CoreTrainer.Core\CoreTrainer.Core.csproj" />
 		<ProjectReference Include="..\..\src\CoreTrainer.Graphics\CoreTrainer.Graphics.csproj" />
+		<ProjectReference Include="..\..\src\CoreTrainer.Networking.Nand\CoreTrainer.Networking.Nand.csproj" />
 	</ItemGroup>
 
 </Project>
