@@ -5,7 +5,8 @@
     "Raylib",
     "Redcode",
     "Serilog",
-    "slnx"
+    "slnx",
+    "xunit"
   ],
   "editor.bracketPairColorization.enabled": true,
   "editor.codeActionsOnSave": {

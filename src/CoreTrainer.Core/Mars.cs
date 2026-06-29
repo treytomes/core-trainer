@@ -7,8 +7,14 @@ public class Mars
 {
 	#region Fields
 
+	/// <summary>
+	/// Cell owner value indicating no warrior has written to a cell.
+	/// </summary>
+	public const int NoOwner = -1;
+
 	private readonly CoreMemory _core;
 	private readonly Queue<int>[] _processQueues;
+	private readonly int[] _cellOwners;
 	private readonly int _maxCycles;
 	private readonly int _maxProcesses;
 	private int _currentCycle;
@@ -28,6 +34,8 @@ public class Mars
 		_processQueues = new Queue<int>[2];
 		_processQueues[0] = new Queue<int>();
 		_processQueues[1] = new Queue<int>();
+		_cellOwners = new int[_core.Size];
+		Array.Fill(_cellOwners, NoOwner);
 		_maxCycles = maxCycles;
 		_maxProcesses = maxProcesses;
 		_currentCycle = 0;
@@ -45,6 +53,28 @@ public class Mars
 
 	#endregion
 
+	#region Ownership
+
+	/// <summary>
+	/// Gets the index of the warrior that last wrote to the given address,
+	/// or <see cref="NoOwner"/> if the cell has never been written.
+	/// </summary>
+	/// <param name="address">Memory address (will be normalized).</param>
+	/// <returns>Owning warrior index, or <see cref="NoOwner"/>.</returns>
+	public int GetCellOwner(int address) => _cellOwners[_core.Normalize(address)];
+
+	/// <summary>
+	/// Writes an instruction to core memory and records the writing warrior as the cell's owner.
+	/// </summary>
+	private void WriteOwned(int warriorIndex, int address, Instruction instruction)
+	{
+		var normalized = _core.Normalize(address);
+		_core.Write(normalized, instruction);
+		_cellOwners[normalized] = warriorIndex;
+	}
+
+	#endregion
+
 	#region Public Methods
 
 	public void LoadWarrior(int warriorIndex, Warrior warrior, int startAddress)
@@ -56,7 +86,10 @@ public class Mars
 			throw new ArgumentNullException(nameof(warrior));
 
 		warrior.StartAddress = startAddress;
-		_core.Load(startAddress, warrior.Instructions);
+		for (var i = 0; i < warrior.Instructions.Length; i++)
+		{
+			WriteOwned(warriorIndex, startAddress + i, warrior.Instructions[i]);
+		}
 		_processQueues[warriorIndex].Enqueue(startAddress);
 	}
 
@@ -166,45 +199,45 @@ public class Mars
 
 			case OpCode.MOV:
 				{
-					var aAddr = ResolveAddress(pc, instruction.AMode, instruction.AValue);
-					var bAddr = ResolveAddress(pc, instruction.BMode, instruction.BValue);
+					var aAddr = ResolveAddress(warriorIndex, pc, instruction.AMode, instruction.AValue);
+					var bAddr = ResolveAddress(warriorIndex, pc, instruction.BMode, instruction.BValue);
 					var source = _core.Read(aAddr);
-					_core.Write(bAddr, source);
+					WriteOwned(warriorIndex, bAddr, source);
 					return _core.Normalize(pc + 1);
 				}
 
 			case OpCode.ADD:
 				{
-					var aAddr = ResolveAddress(pc, instruction.AMode, instruction.AValue);
-					var bAddr = ResolveAddress(pc, instruction.BMode, instruction.BValue);
+					var aAddr = ResolveAddress(warriorIndex, pc, instruction.AMode, instruction.AValue);
+					var bAddr = ResolveAddress(warriorIndex, pc, instruction.BMode, instruction.BValue);
 					var aInst = _core.Read(aAddr);
 					var bInst = _core.Read(bAddr);
 					var result = bInst with { BValue = bInst.BValue + aInst.BValue };
-					_core.Write(bAddr, result);
+					WriteOwned(warriorIndex, bAddr, result);
 					return _core.Normalize(pc + 1);
 				}
 
 			case OpCode.SUB:
 				{
-					var aAddr = ResolveAddress(pc, instruction.AMode, instruction.AValue);
-					var bAddr = ResolveAddress(pc, instruction.BMode, instruction.BValue);
+					var aAddr = ResolveAddress(warriorIndex, pc, instruction.AMode, instruction.AValue);
+					var bAddr = ResolveAddress(warriorIndex, pc, instruction.BMode, instruction.BValue);
 					var aInst = _core.Read(aAddr);
 					var bInst = _core.Read(bAddr);
 					var result = bInst with { BValue = bInst.BValue - aInst.BValue };
-					_core.Write(bAddr, result);
+					WriteOwned(warriorIndex, bAddr, result);
 					return _core.Normalize(pc + 1);
 				}
 
 			case OpCode.JMP:
 				{
-					var aAddr = ResolveAddress(pc, instruction.AMode, instruction.AValue);
+					var aAddr = ResolveAddress(warriorIndex, pc, instruction.AMode, instruction.AValue);
 					return aAddr;
 				}
 
 			case OpCode.JMZ:
 				{
-					var aAddr = ResolveAddress(pc, instruction.AMode, instruction.AValue);
-					var bAddr = ResolveAddress(pc, instruction.BMode, instruction.BValue);
+					var aAddr = ResolveAddress(warriorIndex, pc, instruction.AMode, instruction.AValue);
+					var bAddr = ResolveAddress(warriorIndex, pc, instruction.BMode, instruction.BValue);
 					var bInst = _core.Read(bAddr);
 					if (bInst.BValue == 0)
 						return aAddr;
@@ -213,8 +246,8 @@ public class Mars
 
 			case OpCode.JMN:
 				{
-					var aAddr = ResolveAddress(pc, instruction.AMode, instruction.AValue);
-					var bAddr = ResolveAddress(pc, instruction.BMode, instruction.BValue);
+					var aAddr = ResolveAddress(warriorIndex, pc, instruction.AMode, instruction.AValue);
+					var bAddr = ResolveAddress(warriorIndex, pc, instruction.BMode, instruction.BValue);
 					var bInst = _core.Read(bAddr);
 					if (bInst.BValue != 0)
 						return aAddr;
@@ -223,11 +256,11 @@ public class Mars
 
 			case OpCode.DJN:
 				{
-					var aAddr = ResolveAddress(pc, instruction.AMode, instruction.AValue);
-					var bAddr = ResolveAddress(pc, instruction.BMode, instruction.BValue);
+					var aAddr = ResolveAddress(warriorIndex, pc, instruction.AMode, instruction.AValue);
+					var bAddr = ResolveAddress(warriorIndex, pc, instruction.BMode, instruction.BValue);
 					var bInst = _core.Read(bAddr);
 					var decremented = bInst with { BValue = bInst.BValue - 1 };
-					_core.Write(bAddr, decremented);
+					WriteOwned(warriorIndex, bAddr, decremented);
 					if (decremented.BValue != 0)
 						return aAddr;
 					return _core.Normalize(pc + 1);
@@ -235,8 +268,8 @@ public class Mars
 
 			case OpCode.CMP:
 				{
-					var aAddr = ResolveAddress(pc, instruction.AMode, instruction.AValue);
-					var bAddr = ResolveAddress(pc, instruction.BMode, instruction.BValue);
+					var aAddr = ResolveAddress(warriorIndex, pc, instruction.AMode, instruction.AValue);
+					var bAddr = ResolveAddress(warriorIndex, pc, instruction.BMode, instruction.BValue);
 					var aInst = _core.Read(aAddr);
 					var bInst = _core.Read(bAddr);
 					if (aInst.Equals(bInst))
@@ -246,7 +279,7 @@ public class Mars
 
 			case OpCode.SPL:
 				{
-					var aAddr = ResolveAddress(pc, instruction.AMode, instruction.AValue);
+					var aAddr = ResolveAddress(warriorIndex, pc, instruction.AMode, instruction.AValue);
 					// Only create new process if under the limit
 					if (_processQueues[warriorIndex].Count < _maxProcesses)
 					{
@@ -263,7 +296,7 @@ public class Mars
 		}
 	}
 
-	private int ResolveAddress(int pc, AddressingMode mode, int value)
+	private int ResolveAddress(int warriorIndex, int pc, AddressingMode mode, int value)
 	{
 		switch (mode)
 		{
@@ -285,7 +318,7 @@ public class Mars
 					var directAddr = _core.Normalize(pc + value);
 					var pointer = _core.Read(directAddr);
 					var decremented = pointer with { BValue = pointer.BValue - 1 };
-					_core.Write(directAddr, decremented);
+					WriteOwned(warriorIndex, directAddr, decremented);
 					return _core.Normalize(directAddr + decremented.BValue);
 				}
 

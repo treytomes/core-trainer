@@ -1,5 +1,7 @@
 ﻿using System.CommandLine;
 using System.Reactive.Linq;
+using CoreTrainer.Graphics;
+using CoreTrainer.Graphics.Rendering;
 using CoreTrainer.Graphics.Simulation;
 using CoreTrainer.Graphics.UI;
 using Microsoft.Extensions.Configuration;
@@ -143,6 +145,10 @@ public static class Program
 		// Create simulation controller
 		var simController = new SimulationController();
 
+		// Create the core grid renderer, positioned below the toolbar
+		var gridConfig = new GridConfig { OffsetY = 80 };
+		var coreRenderer = new CoreRenderer(gridConfig);
+
 		// Create control toolbar
 		var toolbar = new Toolbar(10, 10, windowOptions.Width - 130, 60);
 		var stepButton = toolbar.AddButton("Step");
@@ -150,8 +156,8 @@ public static class Program
 		var resetButton = toolbar.AddButton("Reset");
 		var speedDownButton = toolbar.AddButton("<<", 50);
 		var speedLabel = toolbar.AddLabel("1/s", 70);
-		speedLabel.BackgroundColor = Graphics.ColorScheme.Default.PanelBackground;
-		speedLabel.BorderColor = Graphics.ColorScheme.Default.GridLine;
+		speedLabel.BackgroundColor = ColorScheme.Default.PanelBackground;
+		speedLabel.BorderColor = ColorScheme.Default.GridLine;
 		var speedUpButton = toolbar.AddButton(">>", 50);
 
 		// Create close button in top-right corner
@@ -232,7 +238,14 @@ public static class Program
 
 			// Rendering
 			Raylib.BeginDrawing();
-			Raylib.ClearBackground(Graphics.ColorScheme.Default.Background);
+			Raylib.ClearBackground(ColorScheme.Default.Background);
+
+			// Draw the core memory grid
+			if (simController.Mars != null)
+			{
+				coreRenderer.Render(simController.Mars);
+				coreRenderer.RenderProcessMarkers(simController.Mars);
+			}
 
 			// Draw status information
 			var statusY = 90;

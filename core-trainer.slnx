@@ -4,4 +4,7 @@
     <Project Path="src/CoreTrainer.Core/CoreTrainer.Core.csproj" />
     <Project Path="src/CoreTrainer.Graphics/CoreTrainer.Graphics.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/CoreTrainer.Tests/CoreTrainer.Tests.csproj" />
+  </Folder>
 </Solution>
