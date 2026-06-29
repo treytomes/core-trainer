@@ -12,11 +12,6 @@ public class ColorScheme
 
 	private readonly ColorSchemeData _data;
 
-	/// <summary>
-	/// Default color scheme instance.
-	/// </summary>
-	public static readonly ColorScheme Default = new();
-
 	#endregion
 
 	#region Constructors
@@ -91,6 +86,16 @@ public class ColorScheme
 	/// Secondary text color (medium gray).
 	/// </summary>
 	public Color TextSecondary => ToRaylibColor(_data.UI.TextSecondary);
+
+	/// <summary>
+	/// Button background when hovered.
+	/// </summary>
+	public Color ButtonHover => ToRaylibColor(_data.UI.ButtonHover);
+
+	/// <summary>
+	/// Button background when pressed.
+	/// </summary>
+	public Color ButtonPressed => ToRaylibColor(_data.UI.ButtonPressed);
 
 	#endregion
 

@@ -34,9 +34,9 @@ public class Label : UIControl
 	public Color? BackgroundColor { get; set; }
 
 	/// <summary>
-	/// Text color.
+	/// Text color override. When null, inherits the theme's primary text color.
 	/// </summary>
-	public Color TextColor { get; set; } = ColorScheme.Default.TextPrimary;
+	public Color? TextColor { get; set; }
 
 	/// <summary>
 	/// Border color (optional, no border by default).
@@ -88,7 +88,7 @@ public class Label : UIControl
 		var textY = Y + (Height - FontSize) / 2;
 
 		// Draw text
-		Raylib.DrawText(Text, textX, textY, FontSize, TextColor);
+		Raylib.DrawText(Text, textX, textY, FontSize, TextColor ?? Theme.TextPrimary);
 	}
 
 	#endregion

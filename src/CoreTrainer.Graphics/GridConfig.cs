@@ -78,6 +78,44 @@ public class GridConfig
 
 	#endregion
 
+	#region Factory Methods
+
+	/// <summary>
+	/// Creates a grid sized to hold every cell of a core of the given size, so no
+	/// address can map outside the grid. Rows are derived from the column count.
+	/// </summary>
+	/// <param name="coreSize">Number of cells in the core.</param>
+	/// <param name="columns">Number of grid columns (defaults to <see cref="DefaultColumns"/>).</param>
+	/// <param name="cellSize">Cell size in pixels (defaults to <see cref="DefaultCellSize"/>).</param>
+	/// <param name="offsetX">Horizontal offset (defaults to <see cref="DefaultOffsetX"/>).</param>
+	/// <param name="offsetY">Vertical offset (defaults to <see cref="DefaultOffsetY"/>).</param>
+	public static GridConfig ForCoreSize(
+		int coreSize,
+		int columns = DefaultColumns,
+		int cellSize = DefaultCellSize,
+		int offsetX = DefaultOffsetX,
+		int offsetY = DefaultOffsetY)
+	{
+		if (coreSize <= 0)
+			throw new ArgumentOutOfRangeException(nameof(coreSize), "Core size must be positive");
+		if (columns <= 0)
+			throw new ArgumentOutOfRangeException(nameof(columns), "Columns must be positive");
+
+		// Round up so the final partial row is still covered.
+		var rows = (coreSize + columns - 1) / columns;
+
+		return new GridConfig
+		{
+			Columns = columns,
+			Rows = rows,
+			CellSize = cellSize,
+			OffsetX = offsetX,
+			OffsetY = offsetY
+		};
+	}
+
+	#endregion
+
 	#region Methods
 
 	/// <summary>

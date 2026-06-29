@@ -53,6 +53,8 @@ public class UIColors
 	public ColorData PanelBackground { get; set; } = new(30, 30, 30, 255);
 	public ColorData TextPrimary { get; set; } = new(220, 220, 220, 255);
 	public ColorData TextSecondary { get; set; } = new(140, 140, 140, 255);
+	public ColorData ButtonHover { get; set; } = new(50, 50, 50, 255);
+	public ColorData ButtonPressed { get; set; } = new(70, 70, 70, 255);
 }
 
 public class WarriorColors

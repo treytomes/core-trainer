@@ -20,6 +20,7 @@
 
 	<ItemGroup>
 		<ProjectReference Include="..\..\src\CoreTrainer.Core\CoreTrainer.Core.csproj" />
+		<ProjectReference Include="..\..\src\CoreTrainer.Graphics\CoreTrainer.Graphics.csproj" />
 	</ItemGroup>
 
 </Project>

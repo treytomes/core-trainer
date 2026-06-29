@@ -7,6 +7,24 @@ namespace CoreTrainer.Graphics.UI;
 /// </summary>
 public abstract class UIControl
 {
+	#region Fields
+
+	private ColorScheme? _theme;
+
+	#endregion
+
+	#region Constructors
+
+	protected UIControl(int x, int y, int width, int height)
+	{
+		X = x;
+		Y = y;
+		Width = width;
+		Height = height;
+	}
+
+	#endregion
+
 	#region Properties
 
 	/// <summary>
@@ -39,16 +57,27 @@ public abstract class UIControl
 	/// </summary>
 	public Rectangle Bounds => new(X, Y, Width, Height);
 
-	#endregion
+	/// <summary>
+	/// The control's parent in the visual tree, or null if it is a root or detached.
+	/// Set automatically when added to a <see cref="UIContainer"/>.
+	/// </summary>
+	public UIControl? Parent { get; internal set; }
 
-	#region Constructors
-
-	protected UIControl(int x, int y, int width, int height)
+	/// <summary>
+	/// The color scheme governing this control. If not set explicitly, it is inherited
+	/// from the parent chain. The root container is expected to carry the theme.
+	/// </summary>
+	/// <exception cref="InvalidOperationException">
+	/// Thrown when neither this control nor any ancestor provides a theme.
+	/// </exception>
+	public ColorScheme Theme
 	{
-		X = x;
-		Y = y;
-		Width = width;
-		Height = height;
+		get => _theme
+			?? Parent?.Theme
+			?? throw new InvalidOperationException(
+				$"{GetType().Name} has no theme and no ancestor provides one. " +
+				"Add it beneath a root container that carries a theme, or set Theme explicitly.");
+		set => _theme = value;
 	}
 
 	#endregion

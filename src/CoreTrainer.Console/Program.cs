@@ -1,5 +1,6 @@
 ﻿using System.CommandLine;
 using System.Reactive.Linq;
+using CoreTrainer.Core;
 using CoreTrainer.Graphics;
 using CoreTrainer.Graphics.Rendering;
 using CoreTrainer.Graphics.Simulation;
@@ -79,12 +80,17 @@ public static class Program
 			{
 				config.SetBasePath(AppContext.BaseDirectory);
 				config.AddYamlFile("appsettings.yaml", optional: false, reloadOnChange: true);
+				config.AddYamlFile("colorscheme.yaml", optional: true, reloadOnChange: true);
 			})
 			.ConfigureServices((context, services) =>
 			{
 				// Configure options from appsettings.yaml
 				services.Configure<CoreWarsOptions>(context.Configuration.GetSection("CoreWars"));
 				services.Configure<WindowOptions>(context.Configuration.GetSection("Window"));
+
+				// Bind the color scheme (colorscheme.yaml is optional; falls back to defaults)
+				var colorSchemeData = context.Configuration.Get<ColorSchemeData>() ?? new ColorSchemeData();
+				services.AddSingleton(new ColorScheme(colorSchemeData));
 
 				// Register services
 				services.AddSingleton<IWarriorFactory, WarriorFactory>();
@@ -134,6 +140,8 @@ public static class Program
 	private static void RunGuiMode(IServiceProvider services)
 	{
 		var windowOptions = services.GetRequiredService<IOptions<WindowOptions>>().Value;
+		var coreWarsOptions = services.GetRequiredService<IOptions<CoreWarsOptions>>().Value;
+		var colorScheme = services.GetRequiredService<ColorScheme>();
 		var warriorFactory = services.GetRequiredService<IWarriorFactory>();
 
 		Raylib.InitWindow(windowOptions.Width, windowOptions.Height, windowOptions.Title);
@@ -145,40 +153,48 @@ public static class Program
 		// Create simulation controller
 		var simController = new SimulationController();
 
-		// Create the core grid renderer, positioned below the toolbar
-		var gridConfig = new GridConfig { OffsetY = 80 };
-		var coreRenderer = new CoreRenderer(gridConfig);
+		// Create the core grid renderer, sized to the configured core so no address
+		// can map outside the grid, and positioned below the toolbar.
+		var gridConfig = GridConfig.ForCoreSize(coreWarsOptions.CoreSize, offsetY: 80);
+		var coreRenderer = new CoreRenderer(colorScheme, gridConfig);
 
-		// Create control toolbar
-		var toolbar = new Toolbar(10, 10, windowOptions.Width - 130, 60);
+		// Build the UI tree. The root carries the theme; all descendants inherit it.
+		var root = new RootContainer(windowOptions.Width, windowOptions.Height, colorScheme);
+
+		// Control toolbar
+		var toolbar = root.Add(new Toolbar(10, 10, windowOptions.Width - 130, 60));
 		var stepButton = toolbar.AddButton("Step");
 		var runPauseButton = toolbar.AddButton("Run");
 		var resetButton = toolbar.AddButton("Reset");
 		var speedDownButton = toolbar.AddButton("<<", 50);
 		var speedLabel = toolbar.AddLabel("1/s", 70);
-		speedLabel.BackgroundColor = ColorScheme.Default.PanelBackground;
-		speedLabel.BorderColor = ColorScheme.Default.GridLine;
+		// Give the speed readout a panel look so it reads as a field, not floating text.
+		speedLabel.BackgroundColor = colorScheme.PanelBackground;
+		speedLabel.BorderColor = colorScheme.GridLine;
 		var speedUpButton = toolbar.AddButton(">>", 50);
 
-		// Create close button in top-right corner
-		var closeButton = new Button(
+		// Close button in top-right corner
+		var closeButton = root.Add(new Button(
 			x: windowOptions.Width - 110,
 			y: 10,
 			width: 100,
 			height: 40,
 			text: "Close"
-		);
+		));
 
 		var shouldClose = false;
 
-		// Initialize a battle
+		// Initialize a battle using the configured core parameters and shared placement logic
 		var dwarf = warriorFactory.CreateDwarf();
 		var imp = warriorFactory.CreateImp();
 		var random = new Random();
-		var warrior0Start = random.Next(8000);
-		var warrior1Start = (warrior0Start + 4000) % 8000; // Separated
+		var warrior0Start = random.Next(coreWarsOptions.CoreSize);
+		var warrior1Start = WarriorPlacement.GetSeparatedPosition(
+			coreWarsOptions.CoreSize, warrior0Start, coreWarsOptions.MinWarriorSeparation, random);
 
-		simController.Initialize(dwarf, imp, warrior0Start, warrior1Start);
+		simController.Initialize(
+			dwarf, imp, warrior0Start, warrior1Start,
+			coreWarsOptions.CoreSize, coreWarsOptions.MaxCycles, coreWarsOptions.MaxProcesses);
 		Log.Information("Simulation initialized: Dwarf at {W0}, Imp at {W1}", warrior0Start, warrior1Start);
 
 		// Subscribe to button click events
@@ -201,7 +217,9 @@ public static class Program
 			{
 				Log.Information("Reset button clicked");
 				simController.Reset();
-				simController.Initialize(dwarf, imp, warrior0Start, warrior1Start);
+				simController.Initialize(
+					dwarf, imp, warrior0Start, warrior1Start,
+					coreWarsOptions.CoreSize, coreWarsOptions.MaxCycles, coreWarsOptions.MaxProcesses);
 			}),
 
 			speedDownButton.Clicked.Subscribe(_ =>
@@ -232,15 +250,14 @@ public static class Program
 			// Update simulation
 			simController.Update(deltaTime);
 
-			// Update all buttons (to detect clicks and emit events)
-			toolbar.Update();
-			closeButton.Update();
+			// Update the UI tree (detects clicks and emits events)
+			root.Update();
 
 			// Rendering
 			Raylib.BeginDrawing();
-			Raylib.ClearBackground(ColorScheme.Default.Background);
+			Raylib.ClearBackground(colorScheme.Background);
 
-			// Draw the core memory grid
+			// Draw the core memory grid (below the UI, outside the control tree)
 			if (simController.Mars != null)
 			{
 				coreRenderer.Render(simController.Mars);
@@ -265,19 +282,18 @@ public static class Program
 				{
 					var result = simController.LastResult switch
 					{
-						Core.ExecutionResult.Warrior0Wins => "Dwarf Wins!",
-						Core.ExecutionResult.Warrior1Wins => "Imp Wins!",
-						Core.ExecutionResult.Draw => "Draw",
-						Core.ExecutionResult.MaxCyclesReached => "Time Limit Reached",
+						ExecutionResult.Warrior0Wins => "Dwarf Wins!",
+						ExecutionResult.Warrior1Wins => "Imp Wins!",
+						ExecutionResult.Draw => "Draw",
+						ExecutionResult.MaxCyclesReached => "Time Limit Reached",
 						_ => "Unknown"
 					};
 					Raylib.DrawText($"Result: {result}", 20, statusY + 120, 24, Raylib_cs.Color.Yellow);
 				}
 			}
 
-			// Render UI
-			toolbar.Render();
-			closeButton.Render();
+			// Render the UI tree on top of the grid
+			root.Render();
 
 			Raylib.EndDrawing();
 		}

@@ -3,16 +3,10 @@ using Raylib_cs;
 namespace CoreTrainer.Graphics.UI;
 
 /// <summary>
-/// A toolbar container that lays out child controls horizontally.
+/// A container that lays out its child controls horizontally.
 /// </summary>
-public class Toolbar : UIControl
+public class Toolbar : UIContainer
 {
-	#region Fields
-
-	private readonly List<UIControl> _controls = [];
-
-	#endregion
-
 	#region Constructors
 
 	public Toolbar(int x, int y, int width, int height) : base(x, y, width, height)
@@ -22,16 +16,6 @@ public class Toolbar : UIControl
 	#endregion
 
 	#region Properties
-
-	/// <summary>
-	/// Background color of the toolbar.
-	/// </summary>
-	public Color BackgroundColor { get; set; } = ColorScheme.Default.PanelBackground;
-
-	/// <summary>
-	/// Border color of the toolbar.
-	/// </summary>
-	public Color BorderColor { get; set; } = ColorScheme.Default.GridLine;
 
 	/// <summary>
 	/// Border thickness in pixels.
@@ -57,11 +41,6 @@ public class Toolbar : UIControl
 	/// Default control height.
 	/// </summary>
 	public int DefaultControlHeight { get; set; } = 40;
-
-	/// <summary>
-	/// Read-only collection of controls in the toolbar, in layout order.
-	/// </summary>
-	public IReadOnlyList<UIControl> Controls => _controls;
 
 	#endregion
 
@@ -94,95 +73,48 @@ public class Toolbar : UIControl
 		=> Add(new Label(0, 0, width, DefaultControlHeight, text));
 
 	/// <summary>
-	/// Adds an existing control to the toolbar, positioning it automatically.
-	/// </summary>
-	/// <param name="control">Control to add.</param>
-	/// <returns>The added control.</returns>
-	public T Add<T>(T control) where T : UIControl
-	{
-		control.X = GetNextXPosition();
-		control.Y = Y + Padding;
-		_controls.Add(control);
-		return control;
-	}
-
-	/// <summary>
-	/// Removes a control from the toolbar and repositions the remainder.
-	/// </summary>
-	/// <param name="control">Control to remove.</param>
-	/// <returns>True if the control was removed.</returns>
-	public bool Remove(UIControl control)
-	{
-		var removed = _controls.Remove(control);
-		if (removed)
-		{
-			RepositionControls();
-		}
-		return removed;
-	}
-
-	/// <summary>
-	/// Clears all controls from the toolbar.
-	/// </summary>
-	public void Clear()
-		=> _controls.Clear();
-
-	/// <summary>
-	/// Updates all controls in the toolbar.
-	/// </summary>
-	public override void Update()
-	{
-		if (!Visible) return;
-
-		foreach (var control in _controls)
-		{
-			control.Update();
-		}
-	}
-
-	/// <summary>
-	/// Renders the toolbar and all its controls.
+	/// Renders the toolbar chrome (background and border), then its child controls.
 	/// </summary>
 	public override void Render()
 	{
 		if (!Visible) return;
 
-		Raylib.DrawRectangle(X, Y, Width, Height, BackgroundColor);
-		Raylib.DrawRectangleLinesEx(Bounds, BorderThickness, BorderColor);
+		Raylib.DrawRectangle(X, Y, Width, Height, Theme.PanelBackground);
+		Raylib.DrawRectangleLinesEx(Bounds, BorderThickness, Theme.GridLine);
 
-		foreach (var control in _controls)
-		{
-			control.Render();
-		}
+		base.Render();
 	}
 
 	#endregion
 
-	#region Private Methods
+	#region Protected Methods
 
 	/// <summary>
-	/// Calculates the next X position for a new control based on existing controls.
+	/// Positions a newly added control at the end of the horizontal layout.
 	/// </summary>
-	private int GetNextXPosition()
+	protected override void OnChildAdded(UIControl child)
 	{
+		// The child is already in Children; place it after the controls before it.
 		var currentX = X + Padding;
-
-		foreach (var control in _controls)
+		foreach (var control in Children)
 		{
+			if (ReferenceEquals(control, child))
+				break;
 			currentX += control.Width + ControlSpacing;
 		}
 
-		return currentX;
+		child.X = currentX;
+		child.Y = Y + Padding;
 	}
 
 	/// <summary>
-	/// Repositions all controls in layout order after one is removed.
+	/// Reflows all controls in layout order after the child collection changes.
 	/// </summary>
-	private void RepositionControls()
+	protected override void OnChildrenChanged()
 	{
 		var currentX = X + Padding;
 
-		foreach (var control in _controls)
+		foreach (var control in Children)
 		{
 			control.X = currentX;
 			control.Y = Y + Padding;

@@ -40,29 +40,29 @@ public class Button : UIControl
 	public int FontSize { get; set; } = 20;
 
 	/// <summary>
-	/// Background color when button is in normal state.
+	/// Background color override. When null, inherits the theme's panel background.
 	/// </summary>
-	public Color BackgroundColor { get; set; } = ColorScheme.Default.PanelBackground;
+	public Color? BackgroundColor { get; set; }
 
 	/// <summary>
-	/// Background color when button is hovered.
+	/// Background color override when hovered. When null, inherits the theme's hover color.
 	/// </summary>
-	public Color HoverColor { get; set; } = new Color(50, 50, 50, 255);
+	public Color? HoverColor { get; set; }
 
 	/// <summary>
-	/// Background color when button is pressed.
+	/// Background color override when pressed. When null, inherits the theme's pressed color.
 	/// </summary>
-	public Color PressedColor { get; set; } = new Color(70, 70, 70, 255);
+	public Color? PressedColor { get; set; }
 
 	/// <summary>
-	/// Text color.
+	/// Text color override. When null, inherits the theme's primary text color.
 	/// </summary>
-	public Color TextColor { get; set; } = ColorScheme.Default.TextPrimary;
+	public Color? TextColor { get; set; }
 
 	/// <summary>
-	/// Border color.
+	/// Border color override. When null, inherits the theme's grid-line color.
 	/// </summary>
-	public Color BorderColor { get; set; } = ColorScheme.Default.GridLine;
+	public Color? BorderColor { get; set; }
 
 	/// <summary>
 	/// Border thickness in pixels.
@@ -118,29 +118,40 @@ public class Button : UIControl
 	{
 		if (!Visible) return;
 
+		var theme = Theme;
+
+		// Resolve colors from explicit overrides, falling back to the theme.
+		var baseBackground = BackgroundColor ?? theme.PanelBackground;
+		var borderColor = BorderColor ?? theme.GridLine;
+		var textColorBase = TextColor ?? theme.TextPrimary;
+
 		// Determine background color based on state
-		var bgColor = BackgroundColor;
+		Color bgColor;
 		if (!Enabled)
 		{
-			bgColor = ColorScheme.Fade(BackgroundColor, 0.5f);
+			bgColor = ColorScheme.Fade(baseBackground, 0.5f);
 		}
 		else if (_isPressed)
 		{
-			bgColor = PressedColor;
+			bgColor = PressedColor ?? theme.ButtonPressed;
 		}
 		else if (_isHovered)
 		{
-			bgColor = HoverColor;
+			bgColor = HoverColor ?? theme.ButtonHover;
+		}
+		else
+		{
+			bgColor = baseBackground;
 		}
 
 		// Draw background
 		Raylib.DrawRectangle(X, Y, Width, Height, bgColor);
 
 		// Draw border
-		Raylib.DrawRectangleLinesEx(Bounds, BorderThickness, BorderColor);
+		Raylib.DrawRectangleLinesEx(Bounds, BorderThickness, borderColor);
 
 		// Draw text centered
-		var textColor = Enabled ? TextColor : ColorScheme.Fade(TextColor, 0.5f);
+		var textColor = Enabled ? textColorBase : ColorScheme.Fade(textColorBase, 0.5f);
 		var textWidth = Raylib.MeasureText(Text, FontSize);
 		var textX = X + (Width - textWidth) / 2;
 		var textY = Y + (Height - FontSize) / 2;

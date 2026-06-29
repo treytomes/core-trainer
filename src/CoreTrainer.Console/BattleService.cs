@@ -45,7 +45,8 @@ public class BattleService
 
 		// Calculate starting positions with proper circular separation
 		var warrior1Pos = _random.Next(mars.Core.Size);
-		var warrior2Pos = GetSeparatedPosition(mars.Core.Size, warrior1Pos, _options.MinWarriorSeparation);
+		var warrior2Pos = WarriorPlacement.GetSeparatedPosition(
+			mars.Core.Size, warrior1Pos, _options.MinWarriorSeparation, _random);
 
 		_logger.LogInformation("Loading {Warrior1} at position {Position1}", warrior1.Name, warrior1Pos);
 		mars.LoadWarrior(0, warrior1, warrior1Pos);
@@ -78,24 +79,6 @@ public class BattleService
 		}
 
 		return winner;
-	}
-
-	/// <summary>
-	/// Finds a position that is at least minSeparation cells away (circular distance) from the reference position.
-	/// </summary>
-	private int GetSeparatedPosition(int coreSize, int referencePos, int minSeparation)
-	{
-		var position = 0;
-		var circularDistance = 0;
-
-		do
-		{
-			position = _random.Next(coreSize);
-			var linearDistance = Math.Abs(referencePos - position);
-			circularDistance = Math.Min(linearDistance, coreSize - linearDistance);
-		} while (circularDistance < minSeparation);
-
-		return position;
 	}
 
 	#endregion

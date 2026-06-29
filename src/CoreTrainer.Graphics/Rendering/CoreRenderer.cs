@@ -17,10 +17,11 @@ public class CoreRenderer
 
 	#region Constructors
 
-	public CoreRenderer(GridConfig? gridConfig = null, ColorScheme? colorScheme = null)
+	public CoreRenderer(ColorScheme colorScheme, GridConfig? gridConfig = null)
 	{
+		ArgumentNullException.ThrowIfNull(colorScheme);
+		_colorScheme = colorScheme;
 		_gridConfig = gridConfig ?? new GridConfig();
-		_colorScheme = colorScheme ?? ColorScheme.Default;
 	}
 
 	#endregion
