@@ -51,31 +51,31 @@ public class SimulationController
 	#region Public Methods
 
 	/// <summary>
-	/// Initializes a new battle with the given warriors and their starting positions.
+	/// Initializes a new battle with the given combatants and their starting positions.
 	/// </summary>
-	/// <param name="warriors">The warriors to load, in order.</param>
-	/// <param name="startAddresses">Starting address for each warrior (parallel to <paramref name="warriors"/>).</param>
+	/// <param name="entries">The combatants to load, in order (warrior plus optional brain).</param>
+	/// <param name="startAddresses">Starting address for each entry (parallel to <paramref name="entries"/>).</param>
 	/// <param name="coreSize">Core memory size.</param>
 	/// <param name="maxCycles">Maximum cycles.</param>
 	/// <param name="maxProcesses">Maximum processes per warrior.</param>
 	public void Initialize(
-		IReadOnlyList<Warrior> warriors,
+		IReadOnlyList<BattleEntry> entries,
 		IReadOnlyList<int> startAddresses,
 		int coreSize = 8000,
 		int maxCycles = 80000,
 		int maxProcesses = 8000)
 	{
-		ArgumentNullException.ThrowIfNull(warriors);
+		ArgumentNullException.ThrowIfNull(entries);
 		ArgumentNullException.ThrowIfNull(startAddresses);
-		if (warriors.Count == 0)
-			throw new ArgumentException("At least one warrior is required.", nameof(warriors));
-		if (warriors.Count != startAddresses.Count)
-			throw new ArgumentException("Each warrior must have exactly one start address.", nameof(startAddresses));
+		if (entries.Count == 0)
+			throw new ArgumentException("At least one combatant is required.", nameof(entries));
+		if (entries.Count != startAddresses.Count)
+			throw new ArgumentException("Each combatant must have exactly one start address.", nameof(startAddresses));
 
-		_mars = new Mars(coreSize, maxCycles, maxProcesses, warriors.Count);
-		for (var i = 0; i < warriors.Count; i++)
+		_mars = new Mars(coreSize, maxCycles, maxProcesses, entries.Count);
+		for (var i = 0; i < entries.Count; i++)
 		{
-			_mars.LoadWarrior(i, warriors[i], startAddresses[i]);
+			_mars.LoadWarrior(i, entries[i].Warrior, startAddresses[i], entries[i].Brain);
 		}
 
 		_cycleAccumulator = 0f;

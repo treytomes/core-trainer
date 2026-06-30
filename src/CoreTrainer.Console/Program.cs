@@ -139,30 +139,100 @@ public static class Program
 			});
 
 	/// <summary>
-	/// Builds the warrior roster from the battle configuration, falling back to a
-	/// default Dwarf-vs-Imp matchup when the roster is empty.
+	/// Builds the combatant roster from the battle configuration, dispatching on each
+	/// entry's <see cref="WarriorKind"/>. Falls back to a default Dwarf-vs-Imp matchup
+	/// when the roster is empty.
 	/// </summary>
-	private static List<Warrior> BuildRoster(BattleConfig battleConfig, IWarriorFactory factory)
+	private static List<BattleEntry> BuildRoster(
+		BattleConfig battleConfig,
+		IWarriorFactory factory,
+		INandGenomeSerializer genomeSerializer,
+		CoreWarsOptions coreWarsOptions)
 	{
 		var entries = battleConfig.Warriors;
 		if (entries.Count == 0)
 		{
 			Log.Warning("Battle roster is empty; falling back to a default Dwarf vs Imp matchup");
-			return [factory.CreateDwarf(), factory.CreateImp()];
+			return [new BattleEntry(factory.CreateDwarf()), new BattleEntry(factory.CreateImp())];
 		}
 
-		var roster = new List<Warrior>(entries.Count);
+		var roster = new List<BattleEntry>(entries.Count);
 		foreach (var entry in entries)
 		{
-			var warrior = factory.Create(entry.Archetype);
-			if (!string.IsNullOrWhiteSpace(entry.Name))
+			roster.Add(entry.Kind switch
 			{
-				warrior = new Warrior(entry.Name, warrior.Instructions);
-			}
-			roster.Add(warrior);
+				WarriorKind.Archetype => BuildArchetypeEntry(entry, factory),
+				WarriorKind.Nand => BuildNandEntry(entry, genomeSerializer, coreWarsOptions),
+				_ => throw new InvalidOperationException($"Unknown warrior kind '{entry.Kind}'.")
+			});
 		}
 
 		return roster;
+	}
+
+	/// <summary>
+	/// Builds a standard archetype combatant (no brain).
+	/// </summary>
+	private static BattleEntry BuildArchetypeEntry(BattleWarrior entry, IWarriorFactory factory)
+	{
+		var warrior = factory.Create(entry.Archetype);
+		if (!string.IsNullOrWhiteSpace(entry.Name))
+		{
+			warrior = new Warrior(entry.Name, warrior.Instructions);
+		}
+		return new BattleEntry(warrior);
+	}
+
+	/// <summary>
+	/// Builds a NAND-network combatant: loads the genome and wraps it in a brain whose
+	/// observation codec matches the current core parameters. The genome's input width
+	/// must match this codec (it does when trained with the same settings); a mismatch
+	/// surfaces as a clear error from <see cref="NandBrain"/>.
+	/// </summary>
+	private static BattleEntry BuildNandEntry(
+		BattleWarrior entry,
+		INandGenomeSerializer genomeSerializer,
+		CoreWarsOptions coreWarsOptions)
+	{
+		if (string.IsNullOrWhiteSpace(entry.GenomeFile))
+			throw new InvalidOperationException("A NAND warrior entry must specify a GenomeFile.");
+
+		var path = Path.IsPathRooted(entry.GenomeFile)
+			? entry.GenomeFile
+			: Path.Combine(AppContext.BaseDirectory, entry.GenomeFile);
+
+		var genome = genomeSerializer.LoadFromFile(path);
+		var codec = new WarriorObservationCodec(
+			InferWindowRadius(genome, coreWarsOptions),
+			coreWarsOptions.CoreSize,
+			coreWarsOptions.MaxProcesses);
+		var brain = new NandBrain(new NandNetwork(genome), codec);
+
+		// A brain-driven warrior is seeded with a single NOP; the brain overwrites it each step.
+		var name = string.IsNullOrWhiteSpace(entry.Name) ? "Nand" : entry.Name;
+		var warrior = new Warrior(name, [new Instruction(OpCode.NOP, AddressingMode.Direct, 0, AddressingMode.Direct, 0)]);
+		return new BattleEntry(warrior, brain);
+	}
+
+	/// <summary>
+	/// Recovers the window radius a genome was trained with from its input width and the
+	/// current core parameters, so the battle-time codec matches the training-time codec.
+	/// </summary>
+	private static int InferWindowRadius(NandGenome genome, CoreWarsOptions coreWarsOptions)
+	{
+		// Try increasing radii until the codec's input width matches the genome's. This is
+		// robust to the exact PC/process-count field sizing without duplicating that math.
+		for (var radius = 0; radius <= 64; radius++)
+		{
+			var codec = new WarriorObservationCodec(radius, coreWarsOptions.CoreSize, coreWarsOptions.MaxProcesses);
+			if (codec.InputBitCount == genome.InputCount)
+				return radius;
+		}
+
+		throw new InvalidOperationException(
+			$"Could not match genome input width ({genome.InputCount}) to any window radius for the " +
+			$"current core (CoreSize={coreWarsOptions.CoreSize}, MaxProcesses={coreWarsOptions.MaxProcesses}). " +
+			"The genome was likely trained with different core settings.");
 	}
 
 	private static void RunHeadlessBattle(IServiceProvider services)
@@ -177,10 +247,12 @@ public static class Program
 		var battleService = services.GetRequiredService<BattleService>();
 		var warriorFactory = services.GetRequiredService<IWarriorFactory>();
 		var battleConfig = services.GetRequiredService<BattleConfig>();
+		var genomeSerializer = services.GetRequiredService<INandGenomeSerializer>();
+		var coreWarsOptions = services.GetRequiredService<IOptions<CoreWarsOptions>>().Value;
 
 		// Build the roster from the battle configuration
-		var roster = BuildRoster(battleConfig, warriorFactory);
-		AnsiConsole.MarkupLine($"[dim]Roster ({roster.Count}):[/] {string.Join(", ", roster.Select(w => w.Name))}\n");
+		var roster = BuildRoster(battleConfig, warriorFactory, genomeSerializer, coreWarsOptions);
+		AnsiConsole.MarkupLine($"[dim]Roster ({roster.Count}):[/] {string.Join(", ", roster.Select(e => e.Warrior.Name))}\n");
 
 		// Run the battle with visual feedback
 		var winner = AnsiConsole.Status()
@@ -196,7 +268,7 @@ public static class Program
 		// Display result with styling
 		AnsiConsole.WriteLine();
 		var resultPanel = winner.HasValue
-			? new Panel($"[bold green]Winner:[/] [yellow]{roster[winner.Value].Name}[/]")
+			? new Panel($"[bold green]Winner:[/] [yellow]{roster[winner.Value].Warrior.Name}[/]")
 				.Border(BoxBorder.Double)
 				.BorderColor(Spectre.Console.Color.Green)
 			: new Panel("[bold yellow]Result: Draw[/]")
@@ -283,9 +355,10 @@ public static class Program
 		var colorScheme = services.GetRequiredService<ColorScheme>();
 		var warriorFactory = services.GetRequiredService<IWarriorFactory>();
 		var battleConfig = services.GetRequiredService<BattleConfig>();
+		var genomeSerializer = services.GetRequiredService<INandGenomeSerializer>();
 
 		// Build the roster from the battle configuration and a matching color palette.
-		var roster = BuildRoster(battleConfig, warriorFactory);
+		var roster = BuildRoster(battleConfig, warriorFactory, genomeSerializer, coreWarsOptions);
 		var random = new Random();
 		var palette = new WarriorPalette(roster.Count, random);
 
@@ -312,7 +385,7 @@ public static class Program
 				roster, positions,
 				coreWarsOptions.CoreSize, coreWarsOptions.MaxCycles, coreWarsOptions.MaxProcesses);
 			Log.Information("Battle initialized with {Count} warriors: {Names}",
-				roster.Count, string.Join(", ", roster.Select(w => w.Name)));
+				roster.Count, string.Join(", ", roster.Select(e => e.Warrior.Name)));
 		}
 
 		// Build the UI tree. The root carries the theme; all descendants inherit it.
@@ -425,7 +498,7 @@ public static class Program
 				for (var i = 0; i < roster.Count; i++)
 				{
 					var processes = mars.GetProcessQueue(i).Count;
-					Raylib.DrawText($"{roster[i].Name}: {processes}", 20, lineY, 18, palette.GetColor(i));
+					Raylib.DrawText($"{roster[i].Warrior.Name}: {processes}", 20, lineY, 18, palette.GetColor(i));
 					lineY += 24;
 				}
 
@@ -433,7 +506,7 @@ public static class Program
 				{
 					var result = simController.LastResult switch
 					{
-						ExecutionResult.Win => $"{roster[mars.Winner].Name} Wins!",
+						ExecutionResult.Win => $"{roster[mars.Winner].Warrior.Name} Wins!",
 						ExecutionResult.Draw => "Draw",
 						ExecutionResult.MaxCyclesReached => "Time Limit Reached",
 						_ => "Unknown"

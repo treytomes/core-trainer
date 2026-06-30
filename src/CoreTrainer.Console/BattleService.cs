@@ -27,33 +27,33 @@ public class BattleService
 	#region Methods
 
 	/// <summary>
-	/// Runs a battle between any number of warriors.
+	/// Runs a battle between any number of combatants.
 	/// </summary>
-	/// <param name="warriors">The warriors to load, in order.</param>
-	/// <returns>Index of the winning warrior, or null for a draw / time limit.</returns>
-	public int? RunBattle(IReadOnlyList<Warrior> warriors)
+	/// <param name="entries">The combatants to load, in order (warrior plus optional brain).</param>
+	/// <returns>Index of the winning combatant, or null for a draw / time limit.</returns>
+	public int? RunBattle(IReadOnlyList<BattleEntry> entries)
 	{
-		ArgumentNullException.ThrowIfNull(warriors);
-		if (warriors.Count == 0)
-			throw new ArgumentException("At least one warrior is required.", nameof(warriors));
+		ArgumentNullException.ThrowIfNull(entries);
+		if (entries.Count == 0)
+			throw new ArgumentException("At least one combatant is required.", nameof(entries));
 
 		_logger.LogInformation("Initializing battle between {WarriorCount} warriors: {Names}",
-			warriors.Count, string.Join(", ", warriors.Select(w => w.Name)));
+			entries.Count, string.Join(", ", entries.Select(e => e.Warrior.Name)));
 
 		var mars = new Mars(
 			coreSize: _options.CoreSize,
 			maxCycles: _options.MaxCycles,
 			maxProcesses: _options.MaxProcesses,
-			warriorCount: warriors.Count);
+			warriorCount: entries.Count);
 
-		// Choose separated starting positions for all warriors, then load each.
+		// Choose separated starting positions for all combatants, then load each.
 		var positions = WarriorPlacement.GetSeparatedPositions(
-			mars.Core.Size, warriors.Count, _options.MinWarriorSeparation, _random);
+			mars.Core.Size, entries.Count, _options.MinWarriorSeparation, _random);
 
-		for (var i = 0; i < warriors.Count; i++)
+		for (var i = 0; i < entries.Count; i++)
 		{
-			_logger.LogInformation("Loading {Warrior} at position {Position}", warriors[i].Name, positions[i]);
-			mars.LoadWarrior(i, warriors[i], positions[i]);
+			_logger.LogInformation("Loading {Warrior} at position {Position}", entries[i].Warrior.Name, positions[i]);
+			mars.LoadWarrior(i, entries[i].Warrior, positions[i], entries[i].Brain);
 		}
 
 		_logger.LogInformation("Starting battle (max {MaxCycles} cycles, max {MaxProcesses} processes per warrior)",
@@ -65,7 +65,7 @@ public class BattleService
 
 		if (winner.HasValue)
 		{
-			_logger.LogInformation("Winner: {Winner}", warriors[winner.Value].Name);
+			_logger.LogInformation("Winner: {Winner}", entries[winner.Value].Warrior.Name);
 		}
 		else
 		{

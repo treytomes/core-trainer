@@ -1,13 +1,24 @@
 # Battle roster: the warriors loaded into the simulation, in order.
-# Each entry needs an Archetype (Dwarf or Imp) and an optional Name.
 # Override this file at runtime with: --battle <path>
+#
+# Each entry has a Kind discriminator selecting which fields apply:
+#   Kind: Archetype  -> a built-in program; set Archetype (Dwarf or Imp)
+#   Kind: Nand       -> a trained NAND warrior; set GenomeFile (path to a .nand genome,
+#                       relative to the executable). Train one with: --train
+# Name is an optional display label for any kind.
+#
+# Standard and NAND warriors can be mixed freely in the same battle.
 Battle:
   Warriors:
-    - Archetype: Dwarf
+    - Kind: Archetype
+      Archetype: Dwarf
       Name: Dwarf Alpha
-    - Archetype: Imp
+    - Kind: Archetype
+      Archetype: Imp
       Name: Imp Alpha
-    - Archetype: Dwarf
+    - Kind: Archetype
+      Archetype: Dwarf
       Name: Dwarf Beta
-    - Archetype: Imp
+    - Kind: Archetype
+      Archetype: Imp
       Name: Imp Beta
