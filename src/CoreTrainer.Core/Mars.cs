@@ -14,6 +14,7 @@ public class Mars
 
 	private readonly CoreMemory _core;
 	private readonly Queue<int>[] _processQueues;
+	private readonly IWarriorBrain?[] _brains;
 	private readonly int[] _cellOwners;
 	private readonly int _maxCycles;
 	private readonly int _maxProcesses;
@@ -39,6 +40,7 @@ public class Mars
 		{
 			_processQueues[i] = new Queue<int>();
 		}
+		_brains = new IWarriorBrain?[warriorCount];
 		_cellOwners = new int[_core.Size];
 		Array.Fill(_cellOwners, NoOwner);
 		_maxCycles = maxCycles;
@@ -84,11 +86,38 @@ public class Mars
 		_cellOwners[normalized] = warriorIndex;
 	}
 
+	/// <summary>
+	/// Reads the window of cells centered on <paramref name="center"/>, ordered from
+	/// offset <c>-radius</c> to <c>+radius</c> (length <c>2 * radius + 1</c>), wrapping
+	/// around the core.
+	/// </summary>
+	private Instruction[] ReadWindow(int center, int radius)
+	{
+		var window = new Instruction[2 * radius + 1];
+		for (var offset = -radius; offset <= radius; offset++)
+		{
+			window[offset + radius] = _core.Read(center + offset);
+		}
+		return window;
+	}
+
 	#endregion
 
 	#region Public Methods
 
-	public void LoadWarrior(int warriorIndex, Warrior warrior, int startAddress)
+	/// <summary>
+	/// Loads a warrior into the core at the given address.
+	/// </summary>
+	/// <param name="warriorIndex">Slot to load into.</param>
+	/// <param name="warrior">The warrior program to place in memory.</param>
+	/// <param name="startAddress">Address of the warrior's first instruction and initial PC.</param>
+	/// <param name="brain">
+	/// Optional decision maker. When supplied, the warrior synthesizes the instruction it
+	/// executes each cycle via the brain instead of running its in-memory program. When
+	/// null, the warrior runs classically. This is what lets standard and brain-driven
+	/// warriors share one battle.
+	/// </param>
+	public void LoadWarrior(int warriorIndex, Warrior warrior, int startAddress, IWarriorBrain? brain = null)
 	{
 		if (warriorIndex < 0 || warriorIndex >= _processQueues.Length)
 			throw new ArgumentOutOfRangeException(nameof(warriorIndex),
@@ -101,6 +130,7 @@ public class Mars
 		{
 			WriteOwned(warriorIndex, startAddress + i, warrior.Instructions[i]);
 		}
+		_brains[warriorIndex] = brain;
 		_processQueues[warriorIndex].Enqueue(startAddress);
 	}
 
@@ -213,6 +243,20 @@ public class Mars
 
 	private int? ExecuteInstruction(int warriorIndex, int pc)
 	{
+		// A brain-driven warrior synthesizes the instruction to run this cycle and writes
+		// it to the PC before execution. Standard warriors (no brain) run what is already
+		// in memory — letting both kinds share the same battle.
+		var brain = _brains[warriorIndex];
+		if (brain is not null)
+		{
+			var window = ReadWindow(pc, brain.WindowRadius);
+			// The executing process was dequeued in StepCycle, so add it back for a count
+			// that includes the process currently making the decision.
+			var processCount = _processQueues[warriorIndex].Count + 1;
+			var decided = brain.Decide(window, pc, processCount);
+			WriteOwned(warriorIndex, pc, decided);
+		}
+
 		var instruction = _core.Read(pc);
 
 		switch (instruction.OpCode)

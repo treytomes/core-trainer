@@ -16,7 +16,7 @@ public class InstructionCodecTests
 		// The clean-bijection guarantee: 4 bits == 16 patterns == 16 opcodes.
 		var opCodeCount = Enum.GetValues<OpCode>().Length;
 		Assert.Equal(16, opCodeCount);
-		Assert.Equal(opCodeCount, 1 << InstructionCodec.OpCodeBits);
+		Assert.Equal(1 << InstructionCodec.OpCodeBits, opCodeCount);
 	}
 
 	[Fact]
@@ -24,7 +24,7 @@ public class InstructionCodecTests
 	{
 		var modeCount = Enum.GetValues<AddressingMode>().Length;
 		Assert.Equal(4, modeCount);
-		Assert.Equal(modeCount, 1 << InstructionCodec.ModeBits);
+		Assert.Equal(1 << InstructionCodec.ModeBits, modeCount);
 	}
 
 	[Fact]
