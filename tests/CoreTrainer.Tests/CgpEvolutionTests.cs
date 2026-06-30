@@ -68,7 +68,7 @@ public class CgpEvolutionTests
 		var evo = new CgpEvolution(PreferHighOutputAddress, lambda: 4, mutationRate: 0.1, random);
 
 		var reported = new List<int>();
-		evo.Evolve(initial, generations: 10, onGeneration: (gen, _) => reported.Add(gen));
+		evo.Evolve(initial, generations: 10, onGeneration: progress => reported.Add(progress.Generation));
 
 		Assert.Equal(Enumerable.Range(0, 10), reported);
 	}

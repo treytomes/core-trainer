@@ -328,10 +328,10 @@ public static class Program
 				result = evolution.Evolve(
 					initial,
 					trainingOptions.Generations,
-					onGeneration: (generation, bestFitness) =>
+					onGeneration: progress =>
 					{
 						task.Increment(1);
-						task.Description = $"[green]Evolving[/] [dim]gen {generation + 1}, fitness {bestFitness:F1}[/]";
+						task.Description = $"[green]Evolving[/] [dim]gen {progress.Generation + 1}, fitness {progress.Fitness:F1}[/]";
 					});
 			});
 

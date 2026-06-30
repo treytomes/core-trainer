@@ -8,4 +8,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/CoreTrainer.Tests/CoreTrainer.Tests.csproj" />
   </Folder>
+  <Folder Name="/examples/">
+    <Project Path="examples/CoreTrainer.Examples.NandArithmetic/CoreTrainer.Examples.NandArithmetic.csproj" />
+  </Folder>
 </Solution>

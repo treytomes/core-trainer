@@ -62,11 +62,11 @@ public sealed class CgpEvolution
 	/// <param name="initial">The starting parent genome.</param>
 	/// <param name="generations">Number of generations to run (at least 0).</param>
 	/// <param name="onGeneration">
-	/// Optional callback invoked after each generation with (generationIndex, bestFitness),
-	/// for progress reporting.
+	/// Optional callback invoked after each generation with a <see cref="GenerationProgress"/>
+	/// snapshot, for progress reporting.
 	/// </param>
 	/// <returns>The best genome found and its fitness.</returns>
-	public EvolutionResult Evolve(NandGenome initial, int generations, Action<int, double>? onGeneration = null)
+	public EvolutionResult Evolve(NandGenome initial, int generations, Action<GenerationProgress>? onGeneration = null)
 	{
 		ArgumentNullException.ThrowIfNull(initial);
 		if (generations < 0)
@@ -100,7 +100,7 @@ public sealed class CgpEvolution
 				parentFitness = bestChildFitness;
 			}
 
-			onGeneration?.Invoke(generation, parentFitness);
+			onGeneration?.Invoke(new GenerationProgress(generation, parentFitness, parent));
 		}
 
 		return new EvolutionResult(parent, parentFitness, generations);
