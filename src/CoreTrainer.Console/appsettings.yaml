@@ -26,3 +26,12 @@ Window:
   Height: 800
   Title: "Core Wars Visualizer"
   TargetFPS: 60
+
+Training:
+  WindowRadius: 1
+  NodeCount: 200
+  Generations: 200
+  Lambda: 4
+  MutationRate: 0.03
+  BattlesPerOpponent: 3
+  MaxCycles: 8000

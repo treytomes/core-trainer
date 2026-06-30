@@ -5,6 +5,7 @@ using CoreTrainer.Graphics;
 using CoreTrainer.Graphics.Rendering;
 using CoreTrainer.Graphics.Simulation;
 using CoreTrainer.Graphics.UI;
+using CoreTrainer.Networking.Nand;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -42,14 +43,31 @@ public static class Program
 				description: "Path to a battle roster file (defaults to battle.yaml beside the executable)",
 				getDefaultValue: () => null);
 
+			var trainOption = new Option<bool>(
+				name: "--train",
+				description: "Train a NAND-network warrior against the built-in opponents and save it",
+				getDefaultValue: () => false);
+
+			var outputOption = new Option<FileInfo?>(
+				name: "--output",
+				description: "Where to save the trained genome (defaults to trained-warrior.nand)",
+				getDefaultValue: () => null);
+
 			rootCommand.AddOption(headlessOption);
 			rootCommand.AddOption(battleOption);
+			rootCommand.AddOption(trainOption);
+			rootCommand.AddOption(outputOption);
 
-			rootCommand.SetHandler((headless, battleFile) =>
+			rootCommand.SetHandler((headless, battleFile, train, outputFile) =>
 			{
 				var host = CreateHostBuilder(args, battleFile).Build();
 
-				if (headless)
+				if (train)
+				{
+					Log.Information("Running in training mode");
+					RunTraining(host.Services, outputFile);
+				}
+				else if (headless)
 				{
 					Log.Information("Running in headless mode");
 					RunHeadlessBattle(host.Services);
@@ -61,7 +79,7 @@ public static class Program
 				}
 
 				Log.Information("Core Wars Simulator completed successfully");
-			}, headlessOption, battleOption);
+			}, headlessOption, battleOption, trainOption, outputOption);
 
 			return rootCommand.Invoke(args);
 		}
@@ -104,6 +122,7 @@ public static class Program
 				// Configure options from appsettings.yaml
 				services.Configure<CoreWarsOptions>(context.Configuration.GetSection("CoreWars"));
 				services.Configure<WindowOptions>(context.Configuration.GetSection("Window"));
+				services.Configure<TrainingOptions>(context.Configuration.GetSection("Training"));
 
 				// Bind the color scheme (colorscheme.yaml is optional; falls back to defaults)
 				var colorSchemeData = context.Configuration.GetSection("ColorScheme").Get<ColorSchemeData>() ?? new ColorSchemeData();
@@ -116,6 +135,7 @@ public static class Program
 				// Register services
 				services.AddSingleton<IWarriorFactory, WarriorFactory>();
 				services.AddSingleton<BattleService>();
+				services.AddSingleton<INandGenomeSerializer, TextNandGenomeSerializer>();
 			});
 
 	/// <summary>
@@ -184,6 +204,76 @@ public static class Program
 				.BorderColor(Spectre.Console.Color.Yellow);
 
 		AnsiConsole.Write(resultPanel);
+	}
+
+	private static void RunTraining(IServiceProvider services, FileInfo? outputFile)
+	{
+		var coreWarsOptions = services.GetRequiredService<IOptions<CoreWarsOptions>>().Value;
+		var trainingOptions = services.GetRequiredService<IOptions<TrainingOptions>>().Value;
+		var warriorFactory = services.GetRequiredService<IWarriorFactory>();
+		var serializer = services.GetRequiredService<INandGenomeSerializer>();
+
+		AnsiConsole.Write(
+			new FigletText("Train")
+				.LeftJustified()
+				.Color(Spectre.Console.Color.Aqua));
+
+		// Deterministic opponents the warrior is scored against.
+		var opponents = new[] { warriorFactory.CreateDwarf(), warriorFactory.CreateImp() };
+
+		// Codec sizes the network's input/output; the genome must match.
+		var codec = new WarriorObservationCodec(
+			trainingOptions.WindowRadius, coreWarsOptions.CoreSize, coreWarsOptions.MaxProcesses);
+
+		var random = new Random();
+		var fitness = new BattleFitness(
+			opponents, codec, random,
+			coreWarsOptions.CoreSize, trainingOptions.MaxCycles, coreWarsOptions.MaxProcesses,
+			trainingOptions.BattlesPerOpponent);
+
+		var initial = NandGenome.CreateRandom(
+			codec.InputBitCount, trainingOptions.NodeCount, codec.OutputBitCount, random);
+
+		AnsiConsole.MarkupLine(
+			$"[dim]Network:[/] {codec.InputBitCount} inputs, {trainingOptions.NodeCount} nodes, {codec.OutputBitCount} outputs");
+		AnsiConsole.MarkupLine(
+			$"[dim]Strategy:[/] 1+{trainingOptions.Lambda}, {trainingOptions.Generations} generations, " +
+			$"mutation {trainingOptions.MutationRate:P1}, {trainingOptions.BattlesPerOpponent} battles/opponent\n");
+
+		var evolution = new CgpEvolution(
+			fitness.Evaluate, trainingOptions.Lambda, trainingOptions.MutationRate, random);
+
+		EvolutionResult result = null!;
+		AnsiConsole.Progress()
+			.Columns(
+				new TaskDescriptionColumn(),
+				new ProgressBarColumn(),
+				new PercentageColumn(),
+				new ElapsedTimeColumn())
+			.Start(ctx =>
+			{
+				var task = ctx.AddTask("[green]Evolving[/]", maxValue: trainingOptions.Generations);
+				result = evolution.Evolve(
+					initial,
+					trainingOptions.Generations,
+					onGeneration: (generation, bestFitness) =>
+					{
+						task.Increment(1);
+						task.Description = $"[green]Evolving[/] [dim]gen {generation + 1}, fitness {bestFitness:F1}[/]";
+					});
+			});
+
+		// Persist the winner.
+		var path = outputFile?.FullName ?? Path.Combine(AppContext.BaseDirectory, "trained-warrior.nand");
+		serializer.SaveToFile(result.Best, path);
+
+		AnsiConsole.WriteLine();
+		AnsiConsole.Write(new Panel(
+				$"[bold green]Training complete[/]\nFinal fitness: [yellow]{result.Fitness:F1}[/]\nSaved to: [aqua]{path}[/]")
+			.Border(BoxBorder.Double)
+			.BorderColor(Spectre.Console.Color.Green));
+
+		Log.Information("Training complete: fitness {Fitness:F1}, saved to {Path}", result.Fitness, path);
 	}
 
 	private static void RunGuiMode(IServiceProvider services)

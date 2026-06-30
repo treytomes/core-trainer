@@ -4,12 +4,12 @@ using System.Text;
 namespace CoreTrainer.Networking.Nand;
 
 /// <summary>
-/// Serializes <see cref="NandGenome"/> instances to and from a compact, versioned text
-/// format so trained genomes can be persisted and reloaded.
+/// Serializes genomes to a compact, versioned, line-based text format. This is the
+/// default <see cref="INandGenomeSerializer"/> strategy.
 /// </summary>
 /// <remarks>
 /// <para>
-/// The format is line-based and human-inspectable:
+/// The format is human-inspectable:
 /// <code>
 /// nandgenome v1
 /// inputs &lt;count&gt;
@@ -24,7 +24,7 @@ namespace CoreTrainer.Networking.Nand;
 /// invariant) raises a clear exception rather than yielding an invalid genome.
 /// </para>
 /// </remarks>
-public static class NandGenomeSerializer
+public sealed class TextNandGenomeSerializer : INandGenomeSerializer
 {
 	#region Constants
 
@@ -32,12 +32,10 @@ public static class NandGenomeSerializer
 
 	#endregion
 
-	#region Public Methods
+	#region INandGenomeSerializer
 
-	/// <summary>
-	/// Serializes a genome to its text representation.
-	/// </summary>
-	public static string Serialize(NandGenome genome)
+	/// <inheritdoc />
+	public string Serialize(NandGenome genome)
 	{
 		ArgumentNullException.ThrowIfNull(genome);
 
@@ -50,12 +48,8 @@ public static class NandGenomeSerializer
 		return sb.ToString();
 	}
 
-	/// <summary>
-	/// Parses a genome from its text representation.
-	/// </summary>
-	/// <exception cref="FormatException">The text is not a recognized, well-formed genome.</exception>
-	/// <exception cref="ArgumentException">The parsed genome violates the genome invariants.</exception>
-	public static NandGenome Deserialize(string text)
+	/// <inheritdoc />
+	public NandGenome Deserialize(string text)
 	{
 		ArgumentNullException.ThrowIfNull(text);
 
@@ -80,25 +74,6 @@ public static class NandGenomeSerializer
 		{
 			throw new FormatException($"Genome text describes an invalid genome: {ex.Message}", ex);
 		}
-	}
-
-	/// <summary>
-	/// Writes a genome to a file.
-	/// </summary>
-	public static void SaveToFile(NandGenome genome, string path)
-	{
-		ArgumentNullException.ThrowIfNull(genome);
-		ArgumentException.ThrowIfNullOrWhiteSpace(path);
-		File.WriteAllText(path, Serialize(genome));
-	}
-
-	/// <summary>
-	/// Reads a genome from a file.
-	/// </summary>
-	public static NandGenome LoadFromFile(string path)
-	{
-		ArgumentException.ThrowIfNullOrWhiteSpace(path);
-		return Deserialize(File.ReadAllText(path));
 	}
 
 	#endregion

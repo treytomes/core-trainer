@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\CoreTrainer.Core\CoreTrainer.Core.csproj" />
     <ProjectReference Include="..\CoreTrainer.Graphics\CoreTrainer.Graphics.csproj" />
+    <ProjectReference Include="..\CoreTrainer.Networking.Nand\CoreTrainer.Networking.Nand.csproj" />
   </ItemGroup>
 
   <ItemGroup>

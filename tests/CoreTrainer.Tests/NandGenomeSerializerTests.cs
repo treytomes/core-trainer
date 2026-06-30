@@ -4,10 +4,12 @@ namespace CoreTrainer.Tests;
 
 /// <summary>
 /// Tests for genome serialization: round-trip fidelity and rejection of malformed
-/// or invalid genome text.
+/// or invalid genome text. Exercises the default text strategy through the interface.
 /// </summary>
 public class NandGenomeSerializerTests
 {
+	private readonly INandGenomeSerializer _serializer = new TextNandGenomeSerializer();
+
 	#region Round trip
 
 	[Fact]
@@ -16,7 +18,7 @@ public class NandGenomeSerializerTests
 		var random = new Random(31);
 		var original = NandGenome.CreateRandom(inputCount: 6, nodeCount: 40, outputCount: 8, random);
 
-		var restored = NandGenomeSerializer.Deserialize(NandGenomeSerializer.Serialize(original));
+		var restored = _serializer.Deserialize(_serializer.Serialize(original));
 
 		Assert.Equal(original.InputCount, restored.InputCount);
 		Assert.Equal(original.OutputCount, restored.OutputCount);
@@ -31,7 +33,7 @@ public class NandGenomeSerializerTests
 		// A genome with no nodes (outputs read inputs directly) is a valid edge case.
 		var original = new NandGenome(inputCount: 3, outputCount: 2, nodeGenes: [], outputGenes: [0, 2]);
 
-		var restored = NandGenomeSerializer.Deserialize(NandGenomeSerializer.Serialize(original));
+		var restored = _serializer.Deserialize(_serializer.Serialize(original));
 
 		Assert.Equal(0, restored.NodeCount);
 		Assert.Equal(original.OutputGenes.ToArray(), restored.OutputGenes.ToArray());
@@ -46,8 +48,8 @@ public class NandGenomeSerializerTests
 
 		try
 		{
-			NandGenomeSerializer.SaveToFile(original, path);
-			var restored = NandGenomeSerializer.LoadFromFile(path);
+			_serializer.SaveToFile(original, path);
+			var restored = _serializer.LoadFromFile(path);
 
 			Assert.Equal(original.NodeGenes.ToArray(), restored.NodeGenes.ToArray());
 			Assert.Equal(original.OutputGenes.ToArray(), restored.OutputGenes.ToArray());
@@ -65,20 +67,20 @@ public class NandGenomeSerializerTests
 	[Fact]
 	public void Deserialize_UnknownHeader_Throws()
 	{
-		Assert.Throws<FormatException>(() => NandGenomeSerializer.Deserialize("totally not a genome\n"));
+		Assert.Throws<FormatException>(() => _serializer.Deserialize("totally not a genome\n"));
 	}
 
 	[Fact]
 	public void Deserialize_Truncated_Throws()
 	{
-		Assert.Throws<FormatException>(() => NandGenomeSerializer.Deserialize("nandgenome v1\ninputs 2\n"));
+		Assert.Throws<FormatException>(() => _serializer.Deserialize("nandgenome v1\ninputs 2\n"));
 	}
 
 	[Fact]
 	public void Deserialize_NonIntegerToken_Throws()
 	{
 		var text = "nandgenome v1\ninputs 2\noutputs 1\nnodes 0 x\noutputs-src 2\n";
-		Assert.Throws<FormatException>(() => NandGenomeSerializer.Deserialize(text));
+		Assert.Throws<FormatException>(() => _serializer.Deserialize(text));
 	}
 
 	[Fact]
@@ -88,7 +90,7 @@ public class NandGenomeSerializerTests
 		// rejects it; the serializer surfaces that as a FormatException.
 		var text = "nandgenome v1\ninputs 2\noutputs 1\nnodes 2 0\noutputs-src 2\n";
 
-		var ex = Assert.Throws<FormatException>(() => NandGenomeSerializer.Deserialize(text));
+		var ex = Assert.Throws<FormatException>(() => _serializer.Deserialize(text));
 		Assert.NotNull(ex.InnerException); // wraps the constructor's ArgumentException
 	}
 
