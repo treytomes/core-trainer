@@ -1,5 +1,6 @@
 {
   "cSpell.words": [
+    "absmean",
     "appsettings",
     "arange",
     "argmax",
@@ -8,6 +9,7 @@
     "Autoregressively",
     "backprop",
     "backpropagation",
+    "BITLINEAR",
     "checkm",
     "corewar",
     "CUSUM",
@@ -19,6 +21,7 @@
     "Hyperparameters",
     "ICWS",
     "inspectable",
+    "Kaiming",
     "keepdim",
     "logit",
     "logits",
@@ -38,6 +41,9 @@
     "softmax",
     "steppable",
     "subtractor",
+    "ternarization",
+    "ternarized",
+    "Ternarizes",
     "triu",
     "uncentered",
     "unsqueeze",

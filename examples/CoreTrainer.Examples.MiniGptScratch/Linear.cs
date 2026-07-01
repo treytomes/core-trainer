@@ -15,7 +15,7 @@ namespace CoreTrainer.Examples.MiniGptScratch;
 /// Weights are stored <c>[inputDim, outputDim]</c> so <c>x·W</c> maps <c>[time, inputDim]</c> to
 /// <c>[time, outputDim]</c>.
 /// </remarks>
-public sealed class Linear
+public sealed class Linear : ILinearLayer
 {
 	#region Fields
 

@@ -35,7 +35,13 @@ public sealed class ScratchGpt
 
 	#region Constructors
 
-	public ScratchGpt(int vocabSize, int blockSize, int embedDim, int heads, int layers, Random init)
+	/// <param name="linear">
+	/// Factory for the transformer blocks' linear projections — pass <see cref="Linear"/> for a
+	/// full-precision model or <see cref="BitLinear"/> for BitNet-style ternary weights. The token/
+	/// position embeddings and the LM head deliberately stay full precision either way (matching
+	/// BitNet, which leaves the most precision-sensitive layers unquantized).
+	/// </param>
+	public ScratchGpt(int vocabSize, int blockSize, int embedDim, int heads, int layers, Random init, LinearFactory linear)
 	{
 		_blockSize = blockSize;
 		_embedDim = embedDim;
@@ -45,7 +51,7 @@ public sealed class ScratchGpt
 
 		_blocks = new ScratchBlock[layers];
 		for (var i = 0; i < layers; i++)
-			_blocks[i] = new ScratchBlock(embedDim, heads, init);
+			_blocks[i] = new ScratchBlock(embedDim, heads, init, linear);
 
 		_lnfGamma = OnesRow(embedDim);
 		_lnfBeta = new Parameter(new Matrix(1, embedDim));

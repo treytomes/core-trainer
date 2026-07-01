@@ -19,8 +19,8 @@ public sealed class ScratchSelfAttention
 	private readonly int _heads;
 	private readonly int _headDim;
 	private readonly double _scale;
-	private readonly Linear _qkv;   // fused projection to [Q | K | V], width 3·embedDim
-	private readonly Linear _proj;  // output projection
+	private readonly ILinearLayer _qkv;   // fused projection to [Q | K | V], width 3·embedDim
+	private readonly ILinearLayer _proj;  // output projection
 
 	// Saved forward activations for the backward pass.
 	private Matrix? _q, _k, _v;                 // [time, embedDim]
@@ -32,7 +32,7 @@ public sealed class ScratchSelfAttention
 
 	#region Constructors
 
-	public ScratchSelfAttention(int embedDim, int heads, Random init)
+	public ScratchSelfAttention(int embedDim, int heads, Random init, LinearFactory linear)
 	{
 		if (embedDim % heads != 0)
 			throw new ArgumentException($"embedDim ({embedDim}) must be divisible by heads ({heads}).");
@@ -40,8 +40,8 @@ public sealed class ScratchSelfAttention
 		_heads = heads;
 		_headDim = embedDim / heads;
 		_scale = 1.0 / Math.Sqrt(_headDim);
-		_qkv = new Linear(embedDim, 3 * embedDim, init);
-		_proj = new Linear(embedDim, embedDim, init);
+		_qkv = linear(embedDim, 3 * embedDim, init, true);
+		_proj = linear(embedDim, embedDim, init, true);
 	}
 
 	#endregion

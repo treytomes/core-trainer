@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using CoreTrainer.Examples.MiniGptScratch;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
@@ -48,6 +49,13 @@ const double LEARNING_RATE = 3e-3;
 const int LOG_EVERY = 100;
 const int SEED = 1;
 
+// Switch the transformer blocks between full-precision Linear and BitNet-b1.58-style ternary
+// BitLinear. Embeddings and the LM head stay full precision either way (BitNet convention).
+const bool USE_BITLINEAR = true;
+LinearFactory linearFactory = USE_BITLINEAR
+	? (inDim, outDim, init, bias) => new BitLinear(inDim, outDim, init, bias)
+	: (inDim, outDim, init, bias) => new Linear(inDim, outDim, init, bias);
+
 var tokenizer = new CharTokenizer(corpus);
 var padId = tokenizer.VocabSize;             // reserved id beyond the real vocab, used for the loss ignore
 var modelVocab = tokenizer.VocabSize + 1;
@@ -57,7 +65,8 @@ var modelVocab = tokenizer.VocabSize + 1;
 var examples = BuildExamples(sentences, tokenizer);
 
 var rng = new Random(SEED);
-var model = new ScratchGpt(modelVocab, BLOCK_SIZE, EMBED_DIM, HEADS, LAYERS, rng);
+var model = new ScratchGpt(modelVocab, BLOCK_SIZE, EMBED_DIM, HEADS, LAYERS, rng, linearFactory);
+log.LogInformation("Linear layers: {Kind}", USE_BITLINEAR ? "BitLinear (ternary {-1,0,+1} weights)" : "Linear (full precision)");
 var optimizer = new AdamOptimizer(model.Parameters(), LEARNING_RATE);
 
 log.LogInformation("=== Mini-GPT (from scratch) Trainer ===");
@@ -65,6 +74,7 @@ log.LogInformation("Corpus:   {Sentences} sentences, {Chars} chars, vocab {Vocab
 log.LogInformation("Model:    dim {Dim}, {Heads} heads, {Layers} layers, block {Block}", EMBED_DIM, HEADS, LAYERS, BLOCK_SIZE);
 log.LogInformation("Train:    {Examples} sentences, Adam lr {Lr}, {Epochs} epochs", examples.Count, LEARNING_RATE, EPOCHS);
 
+var trainStopwatch = Stopwatch.StartNew();
 for (var epoch = 0; epoch < EPOCHS; epoch++)
 {
 	optimizer.ZeroGrad();
@@ -84,30 +94,52 @@ for (var epoch = 0; epoch < EPOCHS; epoch++)
 	if (epoch == 0 || (epoch + 1) % LOG_EVERY == 0)
 		log.LogInformation("  epoch {Epoch,5}/{Total}   loss {Loss:0.0000}", epoch + 1, EPOCHS, epochLoss / examples.Count);
 }
+trainStopwatch.Stop();
+log.LogInformation("Training time: {Seconds:0.00} s ({PerEpoch:0.00} ms/epoch)",
+	trainStopwatch.Elapsed.TotalSeconds, trainStopwatch.Elapsed.TotalMilliseconds / EPOCHS);
 
 // === 3. Memorization test ============================================================
-log.LogInformation("=== Memorization test (prompt -> greedy continuation) ===");
-var passed = 0;
-foreach (var sentence in sentences)
+// Run the full 5-sentence generation pass many times so the inference timing is a meaningful,
+// log-overhead-free measurement (a single pass is dominated by fixed costs). The produced text is
+// identical every rep (greedy, deterministic), so results are captured once and logged after.
+const int INFERENCE_REPS = 20;
+log.LogInformation("=== Memorization test (prompt -> greedy continuation, x{Reps}) ===", INFERENCE_REPS);
+
+var produced = new string[sentences.Length];
+var inferStopwatch = Stopwatch.StartNew();
+for (var rep = 0; rep < INFERENCE_REPS; rep++)
 {
-	var promptText = sentence[..Math.Min(10, sentence.Length)];
-	var prompt = tokenizer.Encode(promptText);
-	var generatedIds = model.Generate(prompt, maxNewTokens: sentence.Length - promptText.Length + 1);
-	var decoded = tokenizer.Decode(generatedIds);
+	for (var s = 0; s < sentences.Length; s++)
+	{
+		var sentence = sentences[s];
+		var promptText = sentence[..Math.Min(10, sentence.Length)];
+		var prompt = tokenizer.Encode(promptText);
+		var generatedIds = model.Generate(prompt, maxNewTokens: sentence.Length - promptText.Length + 1);
+		var decoded = tokenizer.Decode(generatedIds);
 
-	var newlineAt = decoded.IndexOf('\n');
-	var produced = newlineAt >= 0 ? decoded[..newlineAt] : decoded;
+		var newlineAt = decoded.IndexOf('\n');
+		produced[s] = newlineAt >= 0 ? decoded[..newlineAt] : decoded;
+	}
+}
+inferStopwatch.Stop();
 
-	var ok = produced == sentence;
+var passed = 0;
+for (var s = 0; s < sentences.Length; s++)
+{
+	var ok = produced[s] == sentences[s];
 	if (ok)
 		passed++;
 
+	var promptText = sentences[s][..Math.Min(10, sentences[s].Length)];
 	log.LogInformation("  [{Mark}] prompt \"{Prompt}...\"", ok ? "PASS" : "FAIL", promptText);
-	log.LogInformation("        expected: {Expected}", sentence);
-	log.LogInformation("        produced: {Produced}", produced);
+	log.LogInformation("        expected: {Expected}", sentences[s]);
+	log.LogInformation("        produced: {Produced}", produced[s]);
 }
 
+var totalPasses = INFERENCE_REPS * sentences.Length;
 log.LogInformation("Memorization: {Passed}/{Total} sentences reproduced verbatim.", passed, sentences.Length);
+log.LogInformation("Inference time: {Seconds:0.00} s for {Passes} sentence-generations ({Per:0.00} ms each)",
+	inferStopwatch.Elapsed.TotalSeconds, totalPasses, inferStopwatch.Elapsed.TotalMilliseconds / totalPasses);
 if (passed == sentences.Length)
 	log.LogInformation("SUCCESS: the from-scratch model memorized every sentence.");
 
@@ -144,9 +176,14 @@ static void GradientCheck(ILogger log)
 	log.LogInformation("=== Gradient check (analytic vs numerical) ===");
 
 	var rng = new Random(42);
-	// A tiny model + short sequence keeps the finite-difference sweep cheap.
+	// A tiny model + short sequence keeps the finite-difference sweep cheap. The check always uses
+	// full-precision Linear layers: a BitLinear cannot be finite-difference-checked, because a tiny
+	// weight perturbation almost never changes the rounded ternary value, so the numerical gradient
+	// is ~0 while the straight-through gradient is deliberately nonzero. This validates the shared
+	// backprop machinery; the BitLinear STE is correct by construction (pass-through of that math).
 	const int vocab = 6;
-	var model = new ScratchGpt(vocabSize: vocab, blockSize: 8, embedDim: 8, heads: 2, layers: 1, rng);
+	var model = new ScratchGpt(vocabSize: vocab, blockSize: 8, embedDim: 8, heads: 2, layers: 1, rng,
+		(inDim, outDim, init, bias) => new Linear(inDim, outDim, init, bias));
 	int[] input = [1, 3, 2, 4];
 	int[] target = [3, 2, 4, 5];
 

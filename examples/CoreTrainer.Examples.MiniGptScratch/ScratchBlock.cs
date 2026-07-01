@@ -15,8 +15,8 @@ public sealed class ScratchBlock
 	#region Fields
 
 	private readonly ScratchSelfAttention _attention;
-	private readonly Linear _fc1;   // MLP expand: embedDim -> 4·embedDim
-	private readonly Linear _fc2;   // MLP contract: 4·embedDim -> embedDim
+	private readonly ILinearLayer _fc1;   // MLP expand: embedDim -> 4·embedDim
+	private readonly ILinearLayer _fc2;   // MLP contract: 4·embedDim -> embedDim
 
 	// LayerNorm parameters (scale γ, shift β) for the two pre-norms.
 	private readonly Parameter _ln1Gamma, _ln1Beta;
@@ -30,11 +30,11 @@ public sealed class ScratchBlock
 
 	#region Constructors
 
-	public ScratchBlock(int embedDim, int heads, Random init)
+	public ScratchBlock(int embedDim, int heads, Random init, LinearFactory linear)
 	{
-		_attention = new ScratchSelfAttention(embedDim, heads, init);
-		_fc1 = new Linear(embedDim, 4 * embedDim, init);
-		_fc2 = new Linear(4 * embedDim, embedDim, init);
+		_attention = new ScratchSelfAttention(embedDim, heads, init, linear);
+		_fc1 = linear(embedDim, 4 * embedDim, init, true);
+		_fc2 = linear(4 * embedDim, embedDim, init, true);
 
 		_ln1Gamma = OnesRow(embedDim);
 		_ln1Beta = new Parameter(new Matrix(1, embedDim));
