@@ -1,0 +1,18 @@
+# Serilog configuration for the NAND arithmetic example. Mirrors the format used by
+# CoreTrainer.Console so output and log files are directly comparable between the two apps.
+Serilog:
+  MinimumLevel:
+    Default: Information
+    Override:
+      Microsoft: Warning
+      System: Warning
+  WriteTo:
+    - Name: Console
+      Args:
+        outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}"
+    - Name: File
+      Args:
+        path: logs/nand-arithmetic-.log
+        rollingInterval: Day
+        retainedFileCountLimit: 7
+        outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}"

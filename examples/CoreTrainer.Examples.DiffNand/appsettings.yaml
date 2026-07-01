@@ -1,0 +1,18 @@
+# Serilog configuration for the differentiable-NAND example. Mirrors the format used by
+# CoreTrainer.Console and the NAND arithmetic example so logs are directly comparable.
+Serilog:
+  MinimumLevel:
+    Default: Information
+    Override:
+      Microsoft: Warning
+      System: Warning
+  WriteTo:
+    - Name: Console
+      Args:
+        outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}"
+    - Name: File
+      Args:
+        path: logs/diff-nand-.log
+        rollingInterval: Day
+        retainedFileCountLimit: 7
+        outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}"

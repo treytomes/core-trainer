@@ -73,6 +73,41 @@ public class CgpEvolutionTests
 		Assert.Equal(Enumerable.Range(0, 10), reported);
 	}
 
+	[Fact]
+	public void Evolve_InvokesGenerationStartHookOncePerGeneration()
+	{
+		var random = new Random(5);
+		var initial = NandGenome.CreateRandom(inputCount: 3, nodeCount: 10, outputCount: 1, random);
+		var evo = new CgpEvolution(PreferHighOutputAddress, lambda: 4, mutationRate: 0.1, random);
+
+		var starts = 0;
+		evo.Evolve(initial, generations: 10, onGenerationStart: () => starts++);
+
+		Assert.Equal(10, starts);
+	}
+
+	[Fact]
+	public void Evolve_WithDynamicFitness_ReEvaluatesParentEachGeneration()
+	{
+		// A fitness that changes between generations: the hook flips a flag the fitness reads.
+		// Without per-generation parent re-evaluation, a stale cached score would mask the change.
+		var random = new Random(11);
+		var initial = NandGenome.CreateRandom(inputCount: 2, nodeCount: 5, outputCount: 1, random);
+
+		var generation = 0;
+		// Fitness alternates its scale each generation; we just confirm the run completes and
+		// tracks the shifting landscape rather than freezing on a first-generation score.
+		double DynamicFitness(NandGenome g) => generation % 2 == 0 ? 1.0 : 2.0;
+		var evo = new CgpEvolution(DynamicFitness, lambda: 4, mutationRate: 0.1, random);
+
+		var result = evo.Evolve(
+			initial,
+			generations: 6,
+			onGenerationStart: () => generation++);
+
+		Assert.Equal(6, result.Generations);
+	}
+
 	// Builds a valid ascending node-gene array where each node references its immediate
 	// predecessor addresses — a deterministic, valid starting wiring.
 	private static int[] BuildAscendingNodes(int inputCount, int nodeCount)

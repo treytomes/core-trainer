@@ -10,5 +10,6 @@
   </Folder>
   <Folder Name="/examples/">
     <Project Path="examples/CoreTrainer.Examples.NandArithmetic/CoreTrainer.Examples.NandArithmetic.csproj" />
+    <Project Path="examples/CoreTrainer.Examples.DiffNand/CoreTrainer.Examples.DiffNand.csproj" />
   </Folder>
 </Solution>
