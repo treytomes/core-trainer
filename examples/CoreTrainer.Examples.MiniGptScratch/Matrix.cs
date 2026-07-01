@@ -130,6 +130,71 @@ public sealed class Matrix
 		}
 	}
 
+	/// <summary>
+	/// Ternary matrix product <c>this · (γ·T)</c>: multiplies dense <c>this</c> <c>[Rows, K]</c> by a
+	/// ternary weight <c>T</c> <c>[K, Cols]</c> whose entries are -1, 0, or +1, scaled by
+	/// <paramref name="gamma"/>. Because the weight entries are ternary, the inner product needs
+	/// <b>no multiplies</b>: +1 adds the input, -1 subtracts it, 0 is skipped, and the whole result is
+	/// scaled by γ once at the end. This is BitNet's add-only matmul — it both skips the (often
+	/// majority) zero weights and replaces every remaining multiply with an add/subtract, which for a
+	/// fixed-point <c>Real</c> avoids the expensive widening multiply entirely.
+	/// </summary>
+	/// <param name="trits">Ternary weights in {-1,0,+1}, row-major <c>[K, Cols]</c> (K = this.Cols).</param>
+	/// <param name="cols">Number of output columns (the weight's column count).</param>
+	/// <param name="gamma">The per-tensor scale applied once to every output.</param>
+	/// <remarks>
+	/// Parallelized over output rows exactly like <see cref="MatMul"/>: each row of the result is
+	/// written by one iteration and reads only shared inputs, so there are no cross-row races.
+	/// </remarks>
+	public Matrix TernaryMatMul(sbyte[] trits, int cols, Real gamma)
+	{
+		if (trits.Length != Cols * cols)
+			throw new ArgumentException($"Ternary weight length {trits.Length} != {Cols}·{cols}.");
+
+		var result = new Matrix(Rows, cols);
+
+		const long ParallelThreshold = 512 * 512;
+		var work = (long)Rows * Cols * cols;
+		if (work >= ParallelThreshold && Rows > 1)
+			Parallel.For(0, Rows, i => TernaryRow(i, trits, cols, gamma, result));
+		else
+			for (var i = 0; i < Rows; i++)
+				TernaryRow(i, trits, cols, gamma, result);
+
+		return result;
+	}
+
+	/// <summary>
+	/// Accumulates one output row of <see cref="TernaryMatMul"/> using add/subtract/skip, then scales
+	/// the finished row by γ. Iterating over the ternary weight <c>k</c> lets the zero-skip fire on the
+	/// sparse operand (the whole point), and reuses each input element across all output columns.
+	/// </summary>
+	private void TernaryRow(int i, sbyte[] trits, int cols, Real gamma, Matrix result)
+	{
+		var rowOffset = i * cols;
+		var inRowOffset = i * Cols;
+		for (var k = 0; k < Cols; k++)
+		{
+			var x = _data[inRowOffset + k];
+			if (x == default)
+				continue;
+			var tritOffset = k * cols;
+			for (var j = 0; j < cols; j++)
+			{
+				var t = trits[tritOffset + j];
+				if (t > 0)
+					result._data[rowOffset + j] += x;      // +1: add
+				else if (t < 0)
+					result._data[rowOffset + j] -= x;      // -1: subtract
+				// 0: skip (the majority case for a sparse ternary weight)
+			}
+		}
+
+		// Apply the per-tensor scale once, after the add-only accumulation.
+		for (var j = 0; j < cols; j++)
+			result._data[rowOffset + j] *= gamma;
+	}
+
 	/// <summary>Returns the transpose <c>[Cols, Rows]</c>.</summary>
 	public Matrix Transpose()
 	{

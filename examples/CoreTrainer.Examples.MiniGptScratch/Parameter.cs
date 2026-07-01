@@ -1,22 +1,21 @@
 namespace CoreTrainer.Examples.MiniGptScratch;
 
 /// <summary>
-/// A learnable parameter: its current value, the gradient accumulated for it during the backward
-/// pass, and the Adam optimizer's per-element moment estimates. Bundling all four together is what
-/// a tensor library's autograd + optimizer would manage invisibly; here it is explicit so the
-/// update step can be read directly.
+/// A learnable parameter: its current value and the gradient accumulated for it during the backward
+/// pass. The Adam optimizer keeps its own moment estimates in double precision (see
+/// <see cref="AdamOptimizer"/>) rather than here, so optimizer state never inherits the model's
+/// numeric grain — storing the tiny second moment at, say, fixed-point grain rounds it to zero and
+/// explodes the update.
 /// </summary>
 public sealed class Parameter
 {
 	#region Constructors
 
-	/// <summary>Creates a parameter wrapping <paramref name="value"/>, with zeroed grad and moments.</summary>
+	/// <summary>Creates a parameter wrapping <paramref name="value"/>, with a zeroed gradient.</summary>
 	public Parameter(Matrix value)
 	{
 		Value = value;
 		Grad = new Matrix(value.Rows, value.Cols);
-		M = new Matrix(value.Rows, value.Cols);
-		V = new Matrix(value.Rows, value.Cols);
 	}
 
 	#endregion
@@ -29,11 +28,13 @@ public sealed class Parameter
 	/// <summary>Gradient of the loss w.r.t. this parameter, accumulated over the backward pass.</summary>
 	public Matrix Grad { get; }
 
-	/// <summary>Adam first-moment (mean of gradients) estimate.</summary>
-	public Matrix M { get; }
-
-	/// <summary>Adam second-moment (mean of squared gradients) estimate.</summary>
-	public Matrix V { get; }
+	/// <summary>
+	/// Increments whenever <see cref="Value"/> is updated (once per optimizer step). Lets consumers
+	/// that derive expensive artifacts from the weights — e.g. a <see cref="BitLinear"/> caching its
+	/// ternarized/transposed weights across the several forward/backward passes of one training step —
+	/// detect cheaply whether the weights have changed and their cache is stale.
+	/// </summary>
+	public long Version { get; private set; }
 
 	#endregion
 
@@ -41,6 +42,9 @@ public sealed class Parameter
 
 	/// <summary>Resets the accumulated gradient to zero (called before each backward pass).</summary>
 	public void ZeroGrad() => Grad.Zero();
+
+	/// <summary>Signals that <see cref="Value"/> has changed, invalidating anything derived from it.</summary>
+	public void MarkUpdated() => Version++;
 
 	#endregion
 }

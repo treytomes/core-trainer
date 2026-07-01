@@ -42,7 +42,19 @@ public sealed class BitLinear : ILinearLayer
 
 	private readonly bool _hasBias;
 	private Matrix? _lastInput;      // saved by forward for the weight gradient
-	private Matrix? _effectiveWeight; // γ·W_tern from the last forward, for the input gradient
+
+	// Cached quantization of the latent weights. The trits, scale, and the transposed trits (for the
+	// backward dX matmul) are all pure functions of the weights, which change only once per optimizer
+	// step — but Forward/Backward run once per sentence (several times per step). Caching them keyed on
+	// the weight Version recomputes the ternarization and its transpose once per step instead of once
+	// per sentence, removing that redundant work (and the per-backward transpose allocation) from the
+	// inner loop. A version of -1 means "never computed".
+	private sbyte[]? _trits;         // [inputDim, outputDim], each -1/0/+1
+	private sbyte[]? _tritsT;        // [outputDim, inputDim], the transpose, for backward dX
+	private Real _gamma;
+	private int _inputDim;
+	private int _outputDim;
+	private long _cachedVersion = -1;
 
 	#endregion
 
@@ -95,18 +107,31 @@ public sealed class BitLinear : ILinearLayer
 	public Matrix Forward(Matrix x)
 	{
 		_lastInput = x;
+		EnsureQuantized();
 
-		var (trits, gamma) = Quantize();
-
-		// Effective weight = γ · trit; each entry is -γ, 0, or +γ.
-		var effective = new Matrix(Weight.Value.Rows, Weight.Value.Cols);
-		var eff = effective.Data;
-		for (var i = 0; i < trits.Length; i++)
-			eff[i] = (Real)(trits[i] * gamma);
-		_effectiveWeight = effective;
-
-		var y = x.MatMul(effective);
+		// Add-only ternary matmul: y = (x · T)·γ, no multiplies over the (mostly-zero) weight.
+		var y = x.TernaryMatMul(_trits!, _outputDim, _gamma);
 		return _hasBias ? y.AddRowVector(Bias!.Value) : y;
+	}
+
+	/// <summary>
+	/// Ensures the cached ternarization (trits, scale, and transposed trits) matches the current
+	/// weights, recomputing only when the weight <see cref="Parameter.Version"/> has advanced since the
+	/// last computation. Weights change once per optimizer step, so within a step's several
+	/// forward/backward passes this recomputes exactly once.
+	/// </summary>
+	private void EnsureQuantized()
+	{
+		if (_cachedVersion == Weight.Version && _trits is not null)
+			return;
+
+		_inputDim = Weight.Value.Rows;
+		_outputDim = Weight.Value.Cols;
+		var (trits, gamma) = Quantize();
+		_trits = trits;
+		_gamma = (Real)gamma;
+		_tritsT = TransposeTrits(trits, _inputDim, _outputDim);
+		_cachedVersion = Weight.Version;
 	}
 
 	/// <summary>
@@ -140,18 +165,31 @@ public sealed class BitLinear : ILinearLayer
 	/// </summary>
 	public Matrix Backward(Matrix dY)
 	{
-		if (_lastInput is null || _effectiveWeight is null)
+		if (_lastInput is null || _tritsT is null)
 			throw new InvalidOperationException("Backward called before Forward.");
 
-		// STE: gradient to the latent weights ignores round/clip/scale — pass straight through.
+		// STE: gradient to the latent weights ignores round/clip/scale — pass straight through. Both
+		// operands here are dense (activations and dY), so this stays an ordinary multiply-based matmul.
 		var dW = _lastInput.Transpose().MatMul(dY);
 		Weight.Grad.AddInPlace(dW);
 
 		if (_hasBias)
 			Bias!.Grad.AddInPlace(dY.SumRows());
 
-		// Input gradient uses the effective weight actually used in the forward matmul.
-		return dY.MatMul(_effectiveWeight.Transpose());
+		// Input gradient dX = dY · W_effᵀ. W_effᵀ is the ternary weight transposed to [out, in] times
+		// γ — an add-only ternary matmul. The transpose is cached (see EnsureQuantized), so it is
+		// computed once per optimizer step, not once per backward pass.
+		return dY.TernaryMatMul(_tritsT, _inputDim, _gamma);
+	}
+
+	/// <summary>Transposes a row-major ternary matrix from [rows, cols] to [cols, rows].</summary>
+	private static sbyte[] TransposeTrits(sbyte[] trits, int rows, int cols)
+	{
+		var result = new sbyte[trits.Length];
+		for (var r = 0; r < rows; r++)
+			for (var c = 0; c < cols; c++)
+				result[c * rows + r] = trits[r * cols + c];
+		return result;
 	}
 
 	/// <summary>Box–Muller standard normal sample.</summary>

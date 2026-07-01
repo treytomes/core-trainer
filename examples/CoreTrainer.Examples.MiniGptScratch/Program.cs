@@ -28,6 +28,23 @@ var configuration = new ConfigurationBuilder()
 using var loggerFactory = CreateLoggerFactory(configuration);
 var log = loggerFactory.CreateLogger("MiniGptScratch");
 
+// If a fixed-point overflow (or anything else) crashes the run, still report the max |Raw| reached so
+// far — that is the diagnostic TrackRange exists for, and it is lost if the process dies silently. The
+// handler fires before the process terminates on an unhandled exception.
+if (Fixed.TrackRange)
+{
+	AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+	{
+		var maxAbs = Fixed.MaxAbsRaw;
+		var ex = e.ExceptionObject as Exception;
+		log.LogError("CRASH: Max |Raw| reached before crash: {Raw:N0} (value {Val:0.###} at F={F}).",
+			maxAbs, (double)maxAbs / (1L << Fixed.FractionalBits), Fixed.FractionalBits);
+		// Full exception incl. stack trace, so the crashing line is pinned in the log (it otherwise
+		// only reaches stderr and is lost).
+		log.LogError(ex, "Unhandled exception");
+	};
+}
+
 // === 1. Gradient check ===============================================================
 // Before trusting training, verify backprop numerically. For a single weight w, the analytic
 // gradient dL/dw (from Backward) must match (L(w+h) − L(w−h)) / 2h for small h. Agreement to a few
@@ -55,6 +72,11 @@ var LOG_EVERY = training.GetValue<int>("LogEvery");
 var INFERENCE_REPS = training.GetValue<int>("InferenceReps");
 var SEED = training.GetValue<int>("Seed");
 var USE_BITLINEAR = training.GetValue<bool>("UseBitLinear");
+var PARALLEL_HEAD_THRESHOLD = training.GetValue<long>("ParallelHeadThreshold");
+
+// Configure when attention parallelizes across heads (per-head work >= threshold). Applies to every
+// attention layer for the rest of the run.
+ScratchSelfAttention.ConfigureParallelism(PARALLEL_HEAD_THRESHOLD);
 
 // Switch the transformer blocks between full-precision Linear and BitNet-b1.58-style ternary
 // BitLinear. Embeddings and the LM head stay full precision either way (BitNet convention).
@@ -167,6 +189,26 @@ if (USE_BITLINEAR)
 	log.LogInformation("  Sparsity: {Zeros:N0}/{Weights:N0} weights trained to exactly zero ({Pct:P1} pruned).",
 		report.ZeroCount, report.WeightCount, report.Sparsity);
 	log.LogInformation("  (Packing verified to round-trip losslessly; compiled model is bit-identical to inference.)");
+}
+
+// === 5. Fixed-point range report =====================================================
+// When fixed-point range tracking is on, report the largest |Raw| the model actually reached during
+// the whole run. This is the safety measurement for Fixed.Int64Only: with no Int128 intermediates,
+// the doubled-scale product a.Raw·b.Raw must fit in int64, so it is safe only while max|Raw| < ~3.03e9
+// (= sqrt(long.MaxValue)). It also shows how much of the representable range (±2^(63-F)) the model
+// uses — headroom that could instead buy more fraction bits (finer grain) by lowering F.
+if (Fixed.TrackRange)
+{
+	var maxAbs = Fixed.MaxAbsRaw;
+	var maxValue = (double)maxAbs / (1L << Fixed.FractionalBits);
+	const double int64ProductLimit = 3_037_000_499; // floor(sqrt(long.MaxValue)) — max|Raw| for a safe int64 product
+	log.LogInformation("=== Fixed-point range (F={F}, Int64Only={Mode}) ===", Fixed.FractionalBits, Fixed.Int64Only);
+	log.LogInformation("  Max |Raw| observed: {Raw:N0}  (value {Val:0.###})", maxAbs, maxValue);
+	log.LogInformation("  Int64-safe limit for |Raw|: {Limit:N0}  ->  {Verdict}",
+		int64ProductLimit,
+		maxAbs < int64ProductLimit
+			? $"SAFE with {int64ProductLimit / Math.Max(1, maxAbs):0.0}x headroom (Int64Only holds at F={Fixed.FractionalBits})"
+			: "UNSAFE (products overflow int64 — lower F for more range, or keep Int128)");
 }
 
 return;

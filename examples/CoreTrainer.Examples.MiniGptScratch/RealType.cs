@@ -4,6 +4,7 @@
 // refers to `Real` (never `double`/`float` directly) and does its math through `RealMath`, so this
 // is the single lever for precision.
 global using Real = CoreTrainer.Examples.MiniGptScratch.Fixed;
+// global using Real = double;
 
 namespace CoreTrainer.Examples.MiniGptScratch;
 
@@ -37,4 +38,25 @@ public static class RealMath
 	public static Real Max(Real a, Real b) => a > b ? a : b;
 	public static Real Min(Real a, Real b) => a < b ? a : b;
 	public static Real Round(Real x, MidpointRounding mode) => (Real)Math.Round((double)x, mode);
+
+	/// <summary>
+	/// A "smaller than any real value" sentinel for softmax row-max init, argmax init, and the causal
+	/// attention mask (a masked score must exp() to ~0). Not every <c>Real</c> has a native −∞:
+	/// double/float do; the integer types (<c>Fixed</c>, raw <c>long</c>) use half their minimum, so
+	/// that subtracting a normal value from the sentinel (as row-max subtraction does) cannot overflow.
+	/// Computed once (the <c>typeof</c> checks fold at JIT time) to avoid boxing in the hot loops.
+	/// </summary>
+	public static readonly Real NegativeInfinity = MakeNegativeInfinity();
+
+	private static Real MakeNegativeInfinity()
+	{
+		if (typeof(Real) == typeof(Fixed))
+			return (Real)(object)Fixed.NegativeInfinity;
+		if (typeof(Real) == typeof(long))
+			return (Real)(object)(long.MinValue / 2);
+		// double / float. A non-const local defeats the compile-time constant conversion that would
+		// otherwise reject (Real)double.NegativeInfinity when the Real alias is an integer type.
+		var negInf = double.NegativeInfinity;
+		return (Real)negInf;
+	}
 }

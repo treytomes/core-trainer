@@ -27,7 +27,7 @@ public static class Ops
 		var result = new Matrix(x.Rows, x.Cols);
 		for (var r = 0; r < x.Rows; r++)
 		{
-			var max = Real.NegativeInfinity;
+			var max = RealMath.NegativeInfinity;
 			for (var c = 0; c < x.Cols; c++)
 				max = RealMath.Max(max, x[r, c]);
 

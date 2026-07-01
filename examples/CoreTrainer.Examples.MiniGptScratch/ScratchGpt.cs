@@ -166,7 +166,7 @@ public sealed class ScratchGpt
 
 			// argmax over the vocabulary for the final position.
 			var best = 0;
-			var bestScore = Real.NegativeInfinity;
+			var bestScore = RealMath.NegativeInfinity;
 			for (var v = 0; v < logits.Cols; v++)
 			{
 				if (logits[lastRow, v] > bestScore)

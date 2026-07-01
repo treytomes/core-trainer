@@ -15,6 +15,12 @@ Training:
   InferenceReps: 20    # repeats of the full generation pass for a stable timing measurement
   # Quantization: true = BitNet-b1.58 ternary {-1,0,+1} block weights, false = full-precision Linear.
   UseBitLinear: true
+  # Parallelize the attention head loops when a head's work (~2·time²·headDim scalar ops) reaches this
+  # threshold. Below it the loop stays serial (thread overhead dominates for few/small heads). Lower to
+  # parallelize more eagerly as the model grows; set very high (e.g. 9999999999) to force serial.
+  # At the current tiny size (time≈40, headDim=16) per-head work is ~50k, so 20000 engages the parallel
+  # path here; raise back toward 200000+ if the fixed thread overhead ends up costing more than it saves.
+  ParallelHeadThreshold: 20000
 
 # Serilog configuration for the from-scratch Mini-GPT example. Mirrors the format used by the
 # TorchSharp MiniGpt example so their logs are directly comparable.

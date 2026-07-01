@@ -16,6 +16,14 @@ public sealed class ScratchSelfAttention
 {
 	#region Fields
 
+	/// <summary>
+	/// Estimated per-head work (score + blend ≈ 2·time²·headDim scalar ops) at or above which the head
+	/// loop is run in parallel; below it the threads cost more than they save, so it stays serial. Set
+	/// once at startup from configuration via <see cref="ConfigureParallelism"/>. Default int.MaxValue =
+	/// always serial, so behavior is unchanged until explicitly configured.
+	/// </summary>
+	private static long _parallelHeadThreshold = long.MaxValue;
+
 	private readonly int _heads;
 	private readonly int _headDim;
 	private readonly Real _scale;
@@ -48,6 +56,26 @@ public sealed class ScratchSelfAttention
 
 	#region Methods
 
+	/// <summary>
+	/// Sets the per-head work threshold at or above which the head loops run in parallel (see
+	/// <see cref="_parallelHeadThreshold"/>). A threshold of 0 always parallelizes; a very large value
+	/// never does. Call once at startup from configuration.
+	/// </summary>
+	public static void ConfigureParallelism(long headWorkThreshold) => _parallelHeadThreshold = headWorkThreshold;
+
+	/// <summary>
+	/// True when this layer's per-head work is large enough to justify parallelizing across heads. Work
+	/// is estimated as the score+blend cost ≈ 2·time²·headDim; below the configured threshold the loop
+	/// stays serial (thread overhead would dominate at small sizes / few heads).
+	/// </summary>
+	private bool ShouldParallelizeHeads()
+	{
+		if (_heads <= 1)
+			return false;
+		var perHeadWork = 2L * _time * _time * _headDim;
+		return perHeadWork >= _parallelHeadThreshold;
+	}
+
 	/// <summary>Collects the learnable parameters of both projections.</summary>
 	public IEnumerable<Parameter> Parameters() => _qkv.Parameters().Concat(_proj.Parameters());
 
@@ -73,43 +101,53 @@ public sealed class ScratchSelfAttention
 		_attnWeights = new Matrix[_heads];
 		_attnConcat = new Matrix(_time, embedDim);
 
-		for (var h = 0; h < _heads; h++)
-		{
-			var offset = h * _headDim;
-
-			// Scores[i,j] = (Q_i · K_j) · scale, then mask future (j > i) to -inf and softmax rows.
-			var scores = new Matrix(_time, _time);
-			for (var i = 0; i < _time; i++)
-			{
-				for (var j = 0; j < _time; j++)
-				{
-					if (j > i)
-					{
-						scores[i, j] = Real.NegativeInfinity;
-						continue;
-					}
-					Real dot = 0;
-					for (var d = 0; d < _headDim; d++)
-						dot += _q[i, offset + d] * _k[j, offset + d];
-					scores[i, j] = dot * _scale;
-				}
-			}
-
-			var weights = Ops.SoftmaxRows(scores);       // [time, time], rows sum to 1
-			_attnWeights[h] = weights;
-
-			// Blend values: out_i = Σ_j weights[i,j] · V_j, written into this head's slice.
-			for (var i = 0; i < _time; i++)
-				for (var d = 0; d < _headDim; d++)
-				{
-					Real acc = 0;
-					for (var j = 0; j <= i; j++)
-						acc += weights[i, j] * _v[j, offset + d];
-					_attnConcat[i, offset + d] = acc;
-				}
-		}
+		// Heads are independent: each reads Q/K/V and writes only its own column slice of _attnConcat
+		// and its own _attnWeights[h], so the loop parallelizes with no shared writes. Gated on a work
+		// threshold because for few/small heads the thread overhead outweighs the work.
+		if (ShouldParallelizeHeads())
+			Parallel.For(0, _heads, ForwardHead);
+		else
+			for (var h = 0; h < _heads; h++)
+				ForwardHead(h);
 
 		return _proj.Forward(_attnConcat);
+	}
+
+	/// <summary>Computes one head's masked attention and writes its slice of <c>_attnConcat</c>.</summary>
+	private void ForwardHead(int h)
+	{
+		var offset = h * _headDim;
+
+		// Scores[i,j] = (Q_i · K_j) · scale, then mask future (j > i) to -inf and softmax rows.
+		var scores = new Matrix(_time, _time);
+		for (var i = 0; i < _time; i++)
+		{
+			for (var j = 0; j < _time; j++)
+			{
+				if (j > i)
+				{
+					scores[i, j] = RealMath.NegativeInfinity;
+					continue;
+				}
+				Real dot = 0;
+				for (var d = 0; d < _headDim; d++)
+					dot += _q![i, offset + d] * _k![j, offset + d];
+				scores[i, j] = dot * _scale;
+			}
+		}
+
+		var weights = Ops.SoftmaxRows(scores);       // [time, time], rows sum to 1
+		_attnWeights![h] = weights;
+
+		// Blend values: out_i = Σ_j weights[i,j] · V_j, written into this head's slice.
+		for (var i = 0; i < _time; i++)
+			for (var d = 0; d < _headDim; d++)
+			{
+				Real acc = 0;
+				for (var j = 0; j <= i; j++)
+					acc += weights[i, j] * _v![j, offset + d];
+				_attnConcat![i, offset + d] = acc;
+			}
 	}
 
 	/// <summary>
@@ -131,43 +169,14 @@ public sealed class ScratchSelfAttention
 		var dK = new Matrix(_time, embedDim);
 		var dV = new Matrix(_time, embedDim);
 
-		for (var h = 0; h < _heads; h++)
-		{
-			var offset = h * _headDim;
-			var weights = _attnWeights[h];
-
-			// dWeights[i,j] = Σ_d dConcat[i,d] · V[j,d]; and dV[j,d] += Σ_i weights[i,j]·dConcat[i,d].
-			var dWeights = new Matrix(_time, _time);
-			for (var i = 0; i < _time; i++)
-			{
-				for (var j = 0; j <= i; j++)
-				{
-					Real dw = 0;
-					for (var d = 0; d < _headDim; d++)
-					{
-						var g = dConcat[i, offset + d];
-						dw += g * _v[j, offset + d];
-						dV[j, offset + d] += weights[i, j] * g;
-					}
-					dWeights[i, j] = dw;
-				}
-			}
-
-			// Back through the row-wise softmax to the (masked) scores.
-			var dScores = Ops.SoftmaxRowsBackward(dWeights, weights);
-
-			// Scores[i,j] = scale · Σ_d Q[i,d]·K[j,d]  ->  dQ, dK (only over unmasked j ≤ i).
-			for (var i = 0; i < _time; i++)
-				for (var j = 0; j <= i; j++)
-				{
-					var ds = dScores[i, j] * _scale;
-					for (var d = 0; d < _headDim; d++)
-					{
-						dQ[i, offset + d] += ds * _k[j, offset + d];
-						dK[j, offset + d] += ds * _q[i, offset + d];
-					}
-				}
-		}
+		// Each head accumulates only into its own column slice [offset, offset+headDim) of dQ/dK/dV, so
+		// distinct heads never touch the same cell — the += accumulations are race-free by construction,
+		// and the loop parallelizes like the forward. Same work-threshold gate.
+		if (ShouldParallelizeHeads())
+			Parallel.For(0, _heads, h => BackwardHead(h, dConcat, dQ, dK, dV));
+		else
+			for (var h = 0; h < _heads; h++)
+				BackwardHead(h, dConcat, dQ, dK, dV);
 
 		// Recombine dQ|dK|dV into the fused [time, 3·embedDim] gradient and back through the qkv linear.
 		var dQkv = new Matrix(_time, 3 * embedDim);
@@ -180,6 +189,49 @@ public sealed class ScratchSelfAttention
 			}
 
 		return _qkv.Backward(dQkv);
+	}
+
+	/// <summary>
+	/// Backprops one head: from <paramref name="dConcat"/> through the value blend, the softmax, and the
+	/// scores, accumulating into this head's column slice of <paramref name="dQ"/>/<paramref name="dK"/>/
+	/// <paramref name="dV"/> (disjoint per head, hence safe to run concurrently).
+	/// </summary>
+	private void BackwardHead(int h, Matrix dConcat, Matrix dQ, Matrix dK, Matrix dV)
+	{
+		var offset = h * _headDim;
+		var weights = _attnWeights![h];
+
+		// dWeights[i,j] = Σ_d dConcat[i,d] · V[j,d]; and dV[j,d] += Σ_i weights[i,j]·dConcat[i,d].
+		var dWeights = new Matrix(_time, _time);
+		for (var i = 0; i < _time; i++)
+		{
+			for (var j = 0; j <= i; j++)
+			{
+				Real dw = 0;
+				for (var d = 0; d < _headDim; d++)
+				{
+					var g = dConcat[i, offset + d];
+					dw += g * _v![j, offset + d];
+					dV[j, offset + d] += weights[i, j] * g;
+				}
+				dWeights[i, j] = dw;
+			}
+		}
+
+		// Back through the row-wise softmax to the (masked) scores.
+		var dScores = Ops.SoftmaxRowsBackward(dWeights, weights);
+
+		// Scores[i,j] = scale · Σ_d Q[i,d]·K[j,d]  ->  dQ, dK (only over unmasked j ≤ i).
+		for (var i = 0; i < _time; i++)
+			for (var j = 0; j <= i; j++)
+			{
+				var ds = dScores[i, j] * _scale;
+				for (var d = 0; d < _headDim; d++)
+				{
+					dQ[i, offset + d] += ds * _k![j, offset + d];
+					dK[j, offset + d] += ds * _q![i, offset + d];
+				}
+			}
 	}
 
 	/// <summary>Splits a fused [time, 3·embedDim] projection into its Q, K, V slices.</summary>
