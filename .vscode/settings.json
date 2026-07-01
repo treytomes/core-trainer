@@ -13,6 +13,7 @@
     "CUSUM",
     "dtype",
     "GELU",
+    "Hadamard",
     "Hillis",
     "Hillis's",
     "Hyperparameters",
