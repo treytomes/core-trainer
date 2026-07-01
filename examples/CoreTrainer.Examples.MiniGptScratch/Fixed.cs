@@ -66,6 +66,15 @@ public readonly struct Fixed : IEquatable<Fixed>
 	/// </summary>
 	public static readonly bool TrackRange = false;
 
+	/// <summary>
+	/// When true, the transcendentals (exp/sqrt/tanh) used on the runtime path run in PURE fixed-point
+	/// via <see cref="FixedMath"/> — no floating point anywhere in forward/backward. When false, they
+	/// take the "hybrid island" route in <see cref="RealMath"/> (convert to double, use <see cref="Math"/>,
+	/// convert back), which is the simpler default and the reference the fixed-point versions are checked
+	/// against. Only meaningful when <c>Real</c> is <see cref="Fixed"/>; ignored for double/float.
+	/// </summary>
+	public static readonly bool UseFixedTranscendentals = true;
+
 	private static long _maxAbsRaw;
 
 	#endregion

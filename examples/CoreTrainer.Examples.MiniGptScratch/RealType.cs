@@ -22,16 +22,26 @@ namespace CoreTrainer.Examples.MiniGptScratch;
 /// </remarks>
 public static class RealMath
 {
-	// Transcendentals route through double: convert the Real to double, use the BCL Math overload,
-	// convert back. For double this is an identity; for float it computes in double and narrows; for
-	// Fixed it is the "hybrid transcendental island" — the only place fixed-point arithmetic borrows
-	// floating point, isolated to exp/sqrt/tanh/log inside softmax, LayerNorm, and GELU. Every Real
-	// type supports the explicit Real<->double conversions this relies on.
-	public static Real Sqrt(Real x) => (Real)Math.Sqrt((double)x);
-	public static Real Exp(Real x) => (Real)Math.Exp((double)x);
+	// Whether to use the pure fixed-point transcendentals instead of the double "hybrid island". True
+	// only for a Fixed build with the flag on; the typeof check folds at JIT time for other Real types.
+	private static readonly bool UseFixed = typeof(Real) == typeof(Fixed) && Fixed.UseFixedTranscendentals;
+
+	// Transcendentals route through double by default: convert the Real to double, use the BCL Math
+	// overload, convert back. For double this is an identity; for float it computes in double and
+	// narrows; for Fixed it is the "hybrid transcendental island". When UseFixed is set, exp/sqrt/tanh
+	// instead run in PURE fixed-point via FixedMath — no floating point at all on the runtime path.
+	public static Real Sqrt(Real x) => UseFixed ? FromFixed(FixedMath.Sqrt(ToFixed(x))) : (Real)Math.Sqrt((double)x);
+	public static Real Exp(Real x) => UseFixed ? FromFixed(FixedMath.Exp(ToFixed(x))) : (Real)Math.Exp((double)x);
+	public static Real Tanh(Real x) => UseFixed ? FromFixed(FixedMath.Tanh(ToFixed(x))) : (Real)Math.Tanh((double)x);
+	// Log and Cos are not on the runtime path (Log = loss metric only; Cos = init only), so they keep
+	// the double route — no pure fixed-point version is needed.
 	public static Real Log(Real x) => (Real)Math.Log((double)x);
-	public static Real Tanh(Real x) => (Real)Math.Tanh((double)x);
 	public static Real Cos(Real x) => (Real)Math.Cos((double)x);
+
+	// Bridge Real<->Fixed when UseFixed is true (Real is Fixed then, so these are identity casts via
+	// object; only reached on the Fixed build).
+	private static Fixed ToFixed(Real x) => (Fixed)(object)x!;
+	private static Real FromFixed(Fixed x) => (Real)(object)x;
 
 	// Abs/Max/Min/Round are exact for every Real type and stay in-type (no float round-trip).
 	public static Real Abs(Real x) => x < (Real)0 ? -x : x;

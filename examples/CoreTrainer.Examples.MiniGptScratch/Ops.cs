@@ -83,17 +83,36 @@ public static class Ops
 		return dx;
 	}
 
-	// GELU's elementwise transcendental math is done in double (cheap, and keeps the activation and
-	// its derivative accurate) and narrowed to Real at the boundary via RealMath.
+	// Real-typed GELU constants, for the pure fixed-point path.
+	private static readonly Real GeluCoeffR = (Real)Math.Sqrt(2.0 / Math.PI);
+	private static readonly Real GeluCubic = (Real)0.044715;
+	private static readonly Real Half = (Real)0.5;
+
+	// GELU (tanh approximation). When the pure fixed-point transcendentals are enabled, the whole
+	// computation runs in Real via RealMath.Tanh — no floating point. Otherwise it computes in double
+	// (cheaper and more accurate) and narrows at the boundary.
 	private static Real GeluScalar(Real xr)
 	{
+		if (Fixed.UseFixedTranscendentals)
+		{
+			var inner = GeluCoeffR * (xr + GeluCubic * xr * xr * xr);
+			return Half * xr * ((Real)1 + RealMath.Tanh(inner));
+		}
 		double x = (double)xr;
-		var inner = GeluCoeff * (x + 0.044715 * x * x * x);
-		return (Real)(0.5 * x * (1.0 + Math.Tanh(inner)));
+		var innerD = GeluCoeff * (x + 0.044715 * x * x * x);
+		return (Real)(0.5 * x * (1.0 + Math.Tanh(innerD)));
 	}
 
 	private static Real GeluDerivative(Real xr)
 	{
+		if (Fixed.UseFixedTranscendentals)
+		{
+			var innerR = GeluCoeffR * (xr + GeluCubic * xr * xr * xr);
+			var tanhR = RealMath.Tanh(innerR);
+			var sech2R = (Real)1 - tanhR * tanhR;
+			var dInnerR = GeluCoeffR * ((Real)1 + (Real)3 * GeluCubic * xr * xr);
+			return Half * ((Real)1 + tanhR) + Half * xr * sech2R * dInnerR;
+		}
 		double x = (double)xr;
 		var inner = GeluCoeff * (x + 0.044715 * x * x * x);
 		var tanh = Math.Tanh(inner);
@@ -136,7 +155,19 @@ public static class Ops
 			}
 			variance /= n;
 
-			var inv = 1.0 / Math.Sqrt(variance + Epsilon);
+			// The inverse standard deviation is the one transcendental in LayerNorm. On the pure
+			// fixed-point path it goes through RealMath.Sqrt (no Math.*); otherwise it uses Math.Sqrt.
+			// The mean/variance sums above are plain arithmetic — a wider accumulator, not a float op.
+			double inv;
+			if (Fixed.UseFixedTranscendentals)
+			{
+				var stdR = RealMath.Sqrt((Real)(variance + Epsilon));
+				inv = 1.0 / (double)stdR;
+			}
+			else
+			{
+				inv = 1.0 / Math.Sqrt(variance + Epsilon);
+			}
 			mean[r] = m;
 			invStd[r] = inv;
 

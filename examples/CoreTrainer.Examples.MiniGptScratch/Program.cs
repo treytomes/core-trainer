@@ -51,6 +51,9 @@ if (Fixed.TrackRange)
 // significant figures is strong evidence every hand-derived backward is correct.
 GradientCheck(log);
 
+// Verify the pure fixed-point transcendentals against Math.* before trusting them in training.
+TranscendentalCheck(log);
+
 // === 2. Training =====================================================================
 // The corpus (sentences to memorize) is read from corpus.txt, one per line; model and training
 // hyperparameters come from the Training section of appsettings.yaml.
@@ -315,6 +318,53 @@ static void GradientCheck(ILogger log)
 		log.LogInformation("  PASS: analytic gradients match numerical (max rel err < 1e-4).");
 	else
 		log.LogWarning("  WARN: gradient mismatch (max rel err {Err:0.###E+0}) — backprop may be wrong.", maxRelErr);
+}
+
+// Checks the pure fixed-point transcendentals (FixedMath.Exp/Sqrt/Tanh) against Math.* across the
+// range the model actually exercises, before training relies on them. Skips unless the pure path is
+// enabled. Reports the worst absolute error per function — large error here would silently degrade
+// training, so this is the transcendental analogue of the gradient check.
+static void TranscendentalCheck(ILogger log)
+{
+	if (!Fixed.UseFixedTranscendentals)
+		return;
+
+	log.LogInformation("=== Fixed-point transcendental check (vs Math.*) ===");
+
+	// exp is only ever called on non-positive args in softmax (row max subtracted); sample [-20, 0].
+	var maxExpErr = 0.0;
+	for (var i = 0; i <= 200; i++)
+	{
+		var xd = -20.0 + i * 20.0 / 200.0;
+		var got = (double)FixedMath.Exp((Fixed)xd);
+		maxExpErr = Math.Max(maxExpErr, Math.Abs(got - Math.Exp(xd)));
+	}
+
+	// sqrt is used on LayerNorm variance (>= 0); sample a wide non-negative span.
+	var maxSqrtErr = 0.0;
+	for (var i = 0; i <= 200; i++)
+	{
+		var xd = i * 50.0 / 200.0;
+		var got = (double)FixedMath.Sqrt((Fixed)xd);
+		maxSqrtErr = Math.Max(maxSqrtErr, Math.Abs(got - Math.Sqrt(xd)));
+	}
+
+	// tanh (GELU) sees roughly [-8, 8] after the cubic inner term; sample that.
+	var maxTanhErr = 0.0;
+	for (var i = 0; i <= 200; i++)
+	{
+		var xd = -8.0 + i * 16.0 / 200.0;
+		var got = (double)FixedMath.Tanh((Fixed)xd);
+		maxTanhErr = Math.Max(maxTanhErr, Math.Abs(got - Math.Tanh(xd)));
+	}
+
+	log.LogInformation("  max abs error — exp: {Exp:0.###E+0}, sqrt: {Sqrt:0.###E+0}, tanh: {Tanh:0.###E+0} (F={F})",
+		maxExpErr, maxSqrtErr, maxTanhErr, Fixed.FractionalBits);
+	var worst = Math.Max(maxExpErr, Math.Max(maxSqrtErr, maxTanhErr));
+	if (worst < 1e-2)
+		log.LogInformation("  PASS: fixed-point transcendentals track Math.* within tolerance.");
+	else
+		log.LogWarning("  WARN: large transcendental error ({Err:0.###E+0}) — training may degrade.", worst);
 }
 
 static ILoggerFactory CreateLoggerFactory(IConfiguration configuration)
