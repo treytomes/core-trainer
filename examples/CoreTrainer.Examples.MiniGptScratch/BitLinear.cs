@@ -96,7 +96,27 @@ public sealed class BitLinear : ILinearLayer
 	{
 		_lastInput = x;
 
-		// γ = absmean of the latent weights (per-tensor scale).
+		var (trits, gamma) = Quantize();
+
+		// Effective weight = γ · trit; each entry is -γ, 0, or +γ.
+		var effective = new Matrix(Weight.Value.Rows, Weight.Value.Cols);
+		var eff = effective.Data;
+		for (var i = 0; i < trits.Length; i++)
+			eff[i] = trits[i] * gamma;
+		_effectiveWeight = effective;
+
+		var y = x.MatMul(effective);
+		return _hasBias ? y.AddRowVector(Bias!.Value) : y;
+	}
+
+	/// <summary>
+	/// Ternarizes the current latent weights, returning the per-element trits (each -1, 0, or +1) and
+	/// the per-tensor scale γ. This is the exact quantization the forward pass uses, exposed so the
+	/// "compile" step can export the same ternary weights the model was trained and evaluated on —
+	/// making the exported model bit-identical to inference, not an approximation of it.
+	/// </summary>
+	public (sbyte[] Trits, double Gamma) Quantize()
+	{
 		var latent = Weight.Value.Data;
 		var absSum = 0.0;
 		for (var i = 0; i < latent.Length; i++)
@@ -104,20 +124,13 @@ public sealed class BitLinear : ILinearLayer
 		var gamma = absSum / latent.Length;
 		var inv = 1.0 / (gamma + Epsilon);
 
-		// Effective weight = γ · round(clip(W_latent/γ, -1, 1)); each entry is -γ, 0, or +γ.
-		var effective = new Matrix(Weight.Value.Rows, Weight.Value.Cols);
-		var eff = effective.Data;
+		var trits = new sbyte[latent.Length];
 		for (var i = 0; i < latent.Length; i++)
 		{
 			var t = Math.Round(latent[i] * inv, MidpointRounding.AwayFromZero);
-			if (t > 1.0) t = 1.0;
-			else if (t < -1.0) t = -1.0;
-			eff[i] = t * gamma;
+			trits[i] = t > 1.0 ? (sbyte)1 : t < -1.0 ? (sbyte)-1 : (sbyte)t;
 		}
-		_effectiveWeight = effective;
-
-		var y = x.MatMul(effective);
-		return _hasBias ? y.AddRowVector(Bias!.Value) : y;
+		return (trits, gamma);
 	}
 
 	/// <summary>

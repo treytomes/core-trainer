@@ -61,6 +61,15 @@ public sealed class ScratchBlock
 		yield return _ln2Beta;
 	}
 
+	/// <summary>The block's linear layers (attention projections + MLP), for the ternary compile step.</summary>
+	public IEnumerable<ILinearLayer> LinearLayers()
+	{
+		foreach (var layer in _attention.LinearLayers())
+			yield return layer;
+		yield return _fc1;
+		yield return _fc2;
+	}
+
 	/// <summary>Forward pass over one sequence (shape <c>[time, embedDim]</c>).</summary>
 	public Matrix Forward(Matrix x)
 	{

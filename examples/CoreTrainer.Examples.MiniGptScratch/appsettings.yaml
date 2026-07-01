@@ -1,3 +1,21 @@
+# Training and model hyperparameters for the from-scratch Mini-GPT. The corpus (sentences to
+# memorize) lives in corpus.txt, one sentence per line.
+Training:
+  # Model shape.
+  BlockSize: 64        # max context length (positions)
+  EmbedDim: 64         # embedding / model dimension
+  Heads: 4             # attention heads per block (must divide EmbedDim)
+  Layers: 2            # stacked transformer blocks
+  # Optimization.
+  Epochs: 2000
+  LearningRate: 0.003
+  Seed: 1
+  # Logging / measurement cadence.
+  LogEvery: 100        # epochs between loss log lines
+  InferenceReps: 20    # repeats of the full generation pass for a stable timing measurement
+  # Quantization: true = BitNet-b1.58 ternary {-1,0,+1} block weights, false = full-precision Linear.
+  UseBitLinear: true
+
 # Serilog configuration for the from-scratch Mini-GPT example. Mirrors the format used by the
 # TorchSharp MiniGpt example so their logs are directly comparable.
 Serilog:

@@ -20,7 +20,12 @@ using ILogger = Microsoft.Extensions.Logging.ILogger;
 //   3. A MEMORIZATION TEST — prompts with each sentence's opening and checks verbatim reproduction.
 // ---------------------------------------------------------------------------------------
 
-using var loggerFactory = CreateLoggerFactory();
+var configuration = new ConfigurationBuilder()
+	.SetBasePath(AppContext.BaseDirectory)
+	.AddYamlFile("appsettings.yaml", optional: false, reloadOnChange: false)
+	.Build();
+
+using var loggerFactory = CreateLoggerFactory(configuration);
 var log = loggerFactory.CreateLogger("MiniGptScratch");
 
 // === 1. Gradient check ===============================================================
@@ -30,28 +35,29 @@ var log = loggerFactory.CreateLogger("MiniGptScratch");
 GradientCheck(log);
 
 // === 2. Training =====================================================================
-string[] sentences =
-[
-	"the quick brown fox jumps over the lazy dog.",
-	"a journey of a thousand miles begins with a single step.",
-	"to be or not to be that is the question.",
-	"the mitochondria is the powerhouse of the cell.",
-	"all that glitters is not gold.",
-];
+// The corpus (sentences to memorize) is read from corpus.txt, one per line; model and training
+// hyperparameters come from the Training section of appsettings.yaml.
+var sentences = File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "corpus.txt"))
+	.Where(line => line.Length > 0)
+	.ToArray();
+if (sentences.Length == 0)
+	throw new InvalidOperationException("corpus.txt is empty — add at least one sentence to memorize.");
 var corpus = string.Join("\n", sentences) + "\n";
 
-const int BLOCK_SIZE = 64;
-const int EMBED_DIM = 64;
-const int HEADS = 4;
-const int LAYERS = 2;
-const int EPOCHS = 2000;
-const double LEARNING_RATE = 3e-3;
-const int LOG_EVERY = 100;
-const int SEED = 1;
+var training = configuration.GetSection("Training");
+var BLOCK_SIZE = training.GetValue<int>("BlockSize");
+var EMBED_DIM = training.GetValue<int>("EmbedDim");
+var HEADS = training.GetValue<int>("Heads");
+var LAYERS = training.GetValue<int>("Layers");
+var EPOCHS = training.GetValue<int>("Epochs");
+var LEARNING_RATE = training.GetValue<double>("LearningRate");
+var LOG_EVERY = training.GetValue<int>("LogEvery");
+var INFERENCE_REPS = training.GetValue<int>("InferenceReps");
+var SEED = training.GetValue<int>("Seed");
+var USE_BITLINEAR = training.GetValue<bool>("UseBitLinear");
 
 // Switch the transformer blocks between full-precision Linear and BitNet-b1.58-style ternary
 // BitLinear. Embeddings and the LM head stay full precision either way (BitNet convention).
-const bool USE_BITLINEAR = true;
 LinearFactory linearFactory = USE_BITLINEAR
 	? (inDim, outDim, init, bias) => new BitLinear(inDim, outDim, init, bias)
 	: (inDim, outDim, init, bias) => new Linear(inDim, outDim, init, bias);
@@ -99,10 +105,9 @@ log.LogInformation("Training time: {Seconds:0.00} s ({PerEpoch:0.00} ms/epoch)",
 	trainStopwatch.Elapsed.TotalSeconds, trainStopwatch.Elapsed.TotalMilliseconds / EPOCHS);
 
 // === 3. Memorization test ============================================================
-// Run the full 5-sentence generation pass many times so the inference timing is a meaningful,
+// Run the full generation pass many times so the inference timing is a meaningful,
 // log-overhead-free measurement (a single pass is dominated by fixed costs). The produced text is
 // identical every rep (greedy, deterministic), so results are captured once and logged after.
-const int INFERENCE_REPS = 20;
 log.LogInformation("=== Memorization test (prompt -> greedy continuation, x{Reps}) ===", INFERENCE_REPS);
 
 var produced = new string[sentences.Length];
@@ -142,6 +147,27 @@ log.LogInformation("Inference time: {Seconds:0.00} s for {Passes} sentence-gener
 	inferStopwatch.Elapsed.TotalSeconds, totalPasses, inferStopwatch.Elapsed.TotalMilliseconds / totalPasses);
 if (passed == sentences.Length)
 	log.LogInformation("SUCCESS: the from-scratch model memorized every sentence.");
+
+// === 4. Ternary compile + measure ====================================================
+// The BitNet payoff is at deployment: discard the full-precision latent weights kept for training
+// and export the transformer blocks as packed ternary weights (5 trits/byte) plus one scale per
+// tensor. This measures the size shrink and how many weights trained to exactly zero (sparsity).
+// Runs only for a ternary model; a full-precision Linear model has nothing to compile.
+if (USE_BITLINEAR)
+{
+	var report = TernaryCompiler.Compile(model);
+	log.LogInformation("=== Ternary compile (block weights) ===");
+	log.LogInformation("  Compiled {Layers} BitLinear layers, {Weights:N0} weights.", report.LayerCount, report.WeightCount);
+	log.LogInformation("  Full precision (double): {Full:N0} bytes ({FullKb:0.0} KB)",
+		report.FullPrecisionBytes, report.FullPrecisionBytes / 1024.0);
+	log.LogInformation("  Packed ternary:          {Packed:N0} bytes ({PackedKb:0.0} KB)  [5 trits/byte + γ per tensor]",
+		report.PackedBytes, report.PackedBytes / 1024.0);
+	log.LogInformation("  Compression: {Ratio:0.0}x smaller, {Bits:0.00} effective bits/weight (theoretical min 1.58).",
+		report.CompressionRatio, report.BitsPerWeight);
+	log.LogInformation("  Sparsity: {Zeros:N0}/{Weights:N0} weights trained to exactly zero ({Pct:P1} pruned).",
+		report.ZeroCount, report.WeightCount, report.Sparsity);
+	log.LogInformation("  (Packing verified to round-trip losslessly; compiled model is bit-identical to inference.)");
+}
 
 return;
 
@@ -234,13 +260,8 @@ static void GradientCheck(ILogger log)
 		log.LogWarning("  WARN: gradient mismatch (max rel err {Err:0.###E+0}) — backprop may be wrong.", maxRelErr);
 }
 
-static ILoggerFactory CreateLoggerFactory()
+static ILoggerFactory CreateLoggerFactory(IConfiguration configuration)
 {
-	var configuration = new ConfigurationBuilder()
-		.SetBasePath(AppContext.BaseDirectory)
-		.AddYamlFile("appsettings.yaml", optional: false, reloadOnChange: false)
-		.Build();
-
 	var serilogLogger = new Serilog.LoggerConfiguration()
 		.ReadFrom.Configuration(configuration)
 		.CreateLogger();

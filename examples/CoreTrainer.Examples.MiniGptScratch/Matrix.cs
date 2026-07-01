@@ -85,26 +85,49 @@ public sealed class Matrix
 	/// <summary>
 	/// Standard matrix product <c>this · other</c>: <c>[Rows, K] · [K, Cols] -> [Rows, Cols]</c>.
 	/// </summary>
+	/// <remarks>
+	/// The dominant cost of the whole model, so it is parallelized over output rows: each row of the
+	/// result depends only on the corresponding row of <c>this</c> and (read-only) all of
+	/// <paramref name="other"/>, and writes only to its own slice of the result — so rows are fully
+	/// independent with no shared writes, making a <see cref="Parallel.For"/> safe without locks.
+	/// Small products stay serial, where thread-scheduling overhead would outweigh the work.
+	/// </remarks>
 	public Matrix MatMul(Matrix other)
 	{
 		if (Cols != other.Rows)
 			throw new ArgumentException($"MatMul shape mismatch: [{Rows},{Cols}] · [{other.Rows},{other.Cols}].");
 
 		var result = new Matrix(Rows, other.Cols);
-		for (var i = 0; i < Rows; i++)
-		{
-			for (var k = 0; k < Cols; k++)
-			{
-				var a = _data[i * Cols + k];
-				if (a == 0.0)
-					continue;
-				var rowOffset = i * result.Cols;
-				var otherOffset = k * other.Cols;
-				for (var j = 0; j < result.Cols; j++)
-					result._data[rowOffset + j] += a * other._data[otherOffset + j];
-			}
-		}
+
+		// Parallelize only when there is enough work to amortize the thread overhead; otherwise the
+		// tiny matrices (e.g. the gradient-check model) run faster serially.
+		const long ParallelThreshold = 512 * 512;
+		var work = (long)Rows * Cols * other.Cols;
+		if (work >= ParallelThreshold && Rows > 1)
+			Parallel.For(0, Rows, i => MultiplyRow(i, other, result));
+		else
+			for (var i = 0; i < Rows; i++)
+				MultiplyRow(i, other, result);
+
 		return result;
+	}
+
+	/// <summary>
+	/// Computes one output row <paramref name="i"/> of <c>this · other</c> into <paramref name="result"/>.
+	/// Writes only to row <paramref name="i"/> of the result, so distinct rows are independent.
+	/// </summary>
+	private void MultiplyRow(int i, Matrix other, Matrix result)
+	{
+		var rowOffset = i * result.Cols;
+		for (var k = 0; k < Cols; k++)
+		{
+			var a = _data[i * Cols + k];
+			if (a == 0.0)
+				continue;
+			var otherOffset = k * other.Cols;
+			for (var j = 0; j < result.Cols; j++)
+				result._data[rowOffset + j] += a * other._data[otherOffset + j];
+		}
 	}
 
 	/// <summary>Returns the transpose <c>[Cols, Rows]</c>.</summary>

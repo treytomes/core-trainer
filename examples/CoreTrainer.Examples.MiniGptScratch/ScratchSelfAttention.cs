@@ -51,6 +51,13 @@ public sealed class ScratchSelfAttention
 	/// <summary>Collects the learnable parameters of both projections.</summary>
 	public IEnumerable<Parameter> Parameters() => _qkv.Parameters().Concat(_proj.Parameters());
 
+	/// <summary>The linear projections in this block, for inspection (e.g. the ternary compile step).</summary>
+	public IEnumerable<ILinearLayer> LinearLayers()
+	{
+		yield return _qkv;
+		yield return _proj;
+	}
+
 	/// <summary>
 	/// Forward pass over one sequence <c>x</c> (shape <c>[time, embedDim]</c>), returning the mixed
 	/// representation of the same shape. Saves the per-head attention weights and Q/K/V for backward.

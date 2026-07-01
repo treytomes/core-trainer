@@ -82,6 +82,18 @@ public sealed class ScratchGpt
 	}
 
 	/// <summary>
+	/// The linear layers inside the transformer blocks — the ones that are ternary under BitNet-style
+	/// training. Excludes the embeddings and the LM head, which stay full precision. Used by the
+	/// ternary compile step to export and measure the quantized weights.
+	/// </summary>
+	public IEnumerable<ILinearLayer> BlockLinearLayers()
+	{
+		foreach (var block in _blocks)
+			foreach (var layer in block.LinearLayers())
+				yield return layer;
+	}
+
+	/// <summary>
 	/// Forward pass for one sequence of token ids, returning per-position logits <c>[time, vocab]</c>.
 	/// Saves the token ids and final-norm state for the backward pass.
 	/// </summary>
