@@ -27,14 +27,14 @@ public static class Ops
 		var result = new Matrix(x.Rows, x.Cols);
 		for (var r = 0; r < x.Rows; r++)
 		{
-			var max = double.NegativeInfinity;
+			var max = Real.NegativeInfinity;
 			for (var c = 0; c < x.Cols; c++)
-				max = Math.Max(max, x[r, c]);
+				max = RealMath.Max(max, x[r, c]);
 
-			var sum = 0.0;
+			Real sum = 0;
 			for (var c = 0; c < x.Cols; c++)
 			{
-				var e = Math.Exp(x[r, c] - max);
+				var e = RealMath.Exp(x[r, c] - max);
 				result[r, c] = e;
 				sum += e;
 			}
@@ -55,7 +55,7 @@ public static class Ops
 		var dx = new Matrix(dOut.Rows, dOut.Cols);
 		for (var r = 0; r < dOut.Rows; r++)
 		{
-			var dot = 0.0;
+			Real dot = 0;
 			for (var c = 0; c < dOut.Cols; c++)
 				dot += dOut[r, c] * softmaxOut[r, c];
 
@@ -83,19 +83,23 @@ public static class Ops
 		return dx;
 	}
 
-	private static double GeluScalar(double x)
+	// GELU's elementwise transcendental math is done in double (cheap, and keeps the activation and
+	// its derivative accurate) and narrowed to Real at the boundary via RealMath.
+	private static Real GeluScalar(Real xr)
 	{
+		double x = (double)xr;
 		var inner = GeluCoeff * (x + 0.044715 * x * x * x);
-		return 0.5 * x * (1.0 + Math.Tanh(inner));
+		return (Real)(0.5 * x * (1.0 + Math.Tanh(inner)));
 	}
 
-	private static double GeluDerivative(double x)
+	private static Real GeluDerivative(Real xr)
 	{
+		double x = (double)xr;
 		var inner = GeluCoeff * (x + 0.044715 * x * x * x);
 		var tanh = Math.Tanh(inner);
 		var sech2 = 1.0 - tanh * tanh; // d/du tanh(u) = 1 - tanh²(u)
 		var dInner = GeluCoeff * (1.0 + 3.0 * 0.044715 * x * x);
-		return 0.5 * (1.0 + tanh) + 0.5 * x * sech2 * dInner;
+		return (Real)(0.5 * (1.0 + tanh) + 0.5 * x * sech2 * dInner);
 	}
 
 	#endregion
@@ -117,15 +121,17 @@ public static class Ops
 
 		for (var r = 0; r < x.Rows; r++)
 		{
+			// Per-row mean/variance are accumulated in double for stability, so Real cells are cast
+			// to double where they meet these accumulators (the Fixed<->double boundary is explicit).
 			var m = 0.0;
 			for (var c = 0; c < n; c++)
-				m += x[r, c];
+				m += (double)x[r, c];
 			m /= n;
 
 			var variance = 0.0;
 			for (var c = 0; c < n; c++)
 			{
-				var d = x[r, c] - m;
+				var d = (double)x[r, c] - m;
 				variance += d * d;
 			}
 			variance /= n;
@@ -136,8 +142,8 @@ public static class Ops
 
 			for (var c = 0; c < n; c++)
 			{
-				var norm = (x[r, c] - m) * inv;
-				output[r, c] = norm * gamma[0, c] + beta[0, c];
+				var norm = ((double)x[r, c] - m) * inv;
+				output[r, c] = (Real)(norm * (double)gamma[0, c] + (double)beta[0, c]);
 			}
 		}
 
@@ -158,26 +164,27 @@ public static class Ops
 
 		for (var r = 0; r < x.Rows; r++)
 		{
-			// Reconstruct the normalized row and the two reductions the formula needs.
+			// Reductions run in double (matching the double per-row stats); Real cells are cast to
+			// double at each access and results cast back to Real at Matrix writes.
 			var sumDOut = 0.0;      // Σ (dOut · γ)
 			var sumDOutXhat = 0.0;  // Σ (dOut · γ · x̂)
 			for (var c = 0; c < n; c++)
 			{
-				var xhat = (x[r, c] - mean[r]) * invStd[r];
-				var dNorm = dOut[r, c] * gamma[0, c]; // gradient w.r.t. the normalized value
+				var xhat = ((double)x[r, c] - mean[r]) * invStd[r];
+				var dNorm = (double)dOut[r, c] * (double)gamma[0, c]; // gradient w.r.t. the normalized value
 				sumDOut += dNorm;
 				sumDOutXhat += dNorm * xhat;
 
 				// Parameter grads: dβ = Σ dOut, dγ = Σ dOut·x̂ (summed across rows).
 				betaGrad[0, c] += dOut[r, c];
-				gammaGrad[0, c] += dOut[r, c] * xhat;
+				gammaGrad[0, c] += (Real)((double)dOut[r, c] * xhat);
 			}
 
 			for (var c = 0; c < n; c++)
 			{
-				var xhat = (x[r, c] - mean[r]) * invStd[r];
-				var dNorm = dOut[r, c] * gamma[0, c];
-				dx[r, c] = invStd[r] / n * (n * dNorm - sumDOut - xhat * sumDOutXhat);
+				var xhat = ((double)x[r, c] - mean[r]) * invStd[r];
+				var dNorm = (double)dOut[r, c] * (double)gamma[0, c];
+				dx[r, c] = (Real)(invStd[r] / n * (n * dNorm - sumDOut - xhat * sumDOutXhat));
 			}
 		}
 
@@ -209,11 +216,11 @@ public static class Ops
 				continue; // ignored (padding) position
 
 			counted++;
-			loss += -Math.Log(probs[r, target] + 1e-12);
+			loss += -Math.Log((double)probs[r, target] + 1e-12);
 
 			for (var c = 0; c < logits.Cols; c++)
 				dLogits[r, c] = probs[r, c];
-			dLogits[r, target] -= 1.0; // subtract the one-hot target
+			dLogits[r, target] -= 1; // subtract the one-hot target
 		}
 
 		if (counted == 0)
@@ -221,7 +228,7 @@ public static class Ops
 
 		loss /= counted;
 		// Average the gradient over the counted positions to match the mean loss.
-		var scale = 1.0 / counted;
+		var scale = (Real)(1.0 / counted);
 		for (var i = 0; i < dLogits.Data.Length; i++)
 			dLogits.Data[i] *= scale;
 

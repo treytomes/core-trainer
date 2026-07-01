@@ -36,7 +36,7 @@ public sealed class Linear : ILinearLayer
 		var scale = Math.Sqrt(2.0 / inputDim);
 		var w = new Matrix(inputDim, outputDim);
 		for (var i = 0; i < w.Data.Length; i++)
-			w.Data[i] = NextGaussian(init) * scale;
+			w.Data[i] = (Real)(NextGaussian(init) * scale);
 		Weight = new Parameter(w);
 
 		_hasBias = hasBias;

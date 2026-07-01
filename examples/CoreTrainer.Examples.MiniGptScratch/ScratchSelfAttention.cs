@@ -18,7 +18,7 @@ public sealed class ScratchSelfAttention
 
 	private readonly int _heads;
 	private readonly int _headDim;
-	private readonly double _scale;
+	private readonly Real _scale;
 	private readonly ILinearLayer _qkv;   // fused projection to [Q | K | V], width 3·embedDim
 	private readonly ILinearLayer _proj;  // output projection
 
@@ -39,7 +39,7 @@ public sealed class ScratchSelfAttention
 
 		_heads = heads;
 		_headDim = embedDim / heads;
-		_scale = 1.0 / Math.Sqrt(_headDim);
+		_scale = (Real)(1.0 / Math.Sqrt(_headDim));
 		_qkv = linear(embedDim, 3 * embedDim, init, true);
 		_proj = linear(embedDim, embedDim, init, true);
 	}
@@ -85,10 +85,10 @@ public sealed class ScratchSelfAttention
 				{
 					if (j > i)
 					{
-						scores[i, j] = double.NegativeInfinity;
+						scores[i, j] = Real.NegativeInfinity;
 						continue;
 					}
-					var dot = 0.0;
+					Real dot = 0;
 					for (var d = 0; d < _headDim; d++)
 						dot += _q[i, offset + d] * _k[j, offset + d];
 					scores[i, j] = dot * _scale;
@@ -102,7 +102,7 @@ public sealed class ScratchSelfAttention
 			for (var i = 0; i < _time; i++)
 				for (var d = 0; d < _headDim; d++)
 				{
-					var acc = 0.0;
+					Real acc = 0;
 					for (var j = 0; j <= i; j++)
 						acc += weights[i, j] * _v[j, offset + d];
 					_attnConcat[i, offset + d] = acc;
@@ -142,7 +142,7 @@ public sealed class ScratchSelfAttention
 			{
 				for (var j = 0; j <= i; j++)
 				{
-					var dw = 0.0;
+					Real dw = 0;
 					for (var d = 0; d < _headDim; d++)
 					{
 						var g = dConcat[i, offset + d];

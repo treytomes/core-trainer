@@ -166,7 +166,7 @@ public sealed class ScratchGpt
 
 			// argmax over the vocabulary for the final position.
 			var best = 0;
-			var bestScore = double.NegativeInfinity;
+			var bestScore = Real.NegativeInfinity;
 			for (var v = 0; v < logits.Cols; v++)
 			{
 				if (logits[lastRow, v] > bestScore)
@@ -187,7 +187,7 @@ public sealed class ScratchGpt
 		{
 			var u1 = 1.0 - rng.NextDouble();
 			var u2 = 1.0 - rng.NextDouble();
-			m.Data[i] = Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Cos(2.0 * Math.PI * u2) * std;
+			m.Data[i] = (Real)(Math.Sqrt(-2.0 * Math.Log(u1)) * Math.Cos(2.0 * Math.PI * u2) * std);
 		}
 		return m;
 	}
@@ -195,7 +195,7 @@ public sealed class ScratchGpt
 	private static Parameter OnesRow(int dim)
 	{
 		var m = new Matrix(1, dim);
-		m.Fill(1.0);
+		m.Fill(1);
 		return new Parameter(m);
 	}
 

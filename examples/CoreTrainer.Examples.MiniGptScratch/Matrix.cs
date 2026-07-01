@@ -1,7 +1,7 @@
 namespace CoreTrainer.Examples.MiniGptScratch;
 
 /// <summary>
-/// A dense 2-D matrix of doubles stored row-major, the single numeric workhorse for the
+/// A dense 2-D matrix of Reals stored row-major, the single numeric workhorse for the
 /// from-scratch transformer. Every activation and parameter in the model is a <see cref="Matrix"/>,
 /// and every forward/backward operation is expressed in terms of the handful of primitives here.
 /// </summary>
@@ -15,7 +15,7 @@ public sealed class Matrix
 {
 	#region Fields
 
-	private readonly double[] _data;
+	private readonly Real[] _data;
 
 	#endregion
 
@@ -26,11 +26,11 @@ public sealed class Matrix
 	{
 		Rows = rows;
 		Cols = cols;
-		_data = new double[rows * cols];
+		_data = new Real[rows * cols];
 	}
 
 	/// <summary>Wraps an existing row-major backing array (no copy).</summary>
-	private Matrix(int rows, int cols, double[] data)
+	private Matrix(int rows, int cols, Real[] data)
 	{
 		Rows = rows;
 		Cols = cols;
@@ -48,10 +48,10 @@ public sealed class Matrix
 	public int Cols { get; }
 
 	/// <summary>The flat row-major backing store, for callers that need raw access.</summary>
-	public double[] Data => _data;
+	public Real[] Data => _data;
 
 	/// <summary>Element access at (row, col).</summary>
-	public double this[int row, int col]
+	public Real this[int row, int col]
 	{
 		get => _data[row * Cols + col];
 		set => _data[row * Cols + col] = value;
@@ -62,7 +62,7 @@ public sealed class Matrix
 	#region Methods
 
 	/// <summary>Creates a matrix from a 2-D array literal (rows of columns).</summary>
-	public static Matrix From(double[,] values)
+	public static Matrix From(Real[,] values)
 	{
 		var rows = values.GetLength(0);
 		var cols = values.GetLength(1);
@@ -74,10 +74,10 @@ public sealed class Matrix
 	}
 
 	/// <summary>Returns a deep copy.</summary>
-	public Matrix Clone() => new(Rows, Cols, (double[])_data.Clone());
+	public Matrix Clone() => new(Rows, Cols, (Real[])_data.Clone());
 
 	/// <summary>Fills every element with <paramref name="value"/>.</summary>
-	public void Fill(double value) => Array.Fill(_data, value);
+	public void Fill(Real value) => Array.Fill(_data, value);
 
 	/// <summary>Zeroes every element.</summary>
 	public void Zero() => Array.Clear(_data);
@@ -122,7 +122,7 @@ public sealed class Matrix
 		for (var k = 0; k < Cols; k++)
 		{
 			var a = _data[i * Cols + k];
-			if (a == 0.0)
+			if (a == default)
 				continue;
 			var otherOffset = k * other.Cols;
 			for (var j = 0; j < result.Cols; j++)
@@ -175,7 +175,7 @@ public sealed class Matrix
 	}
 
 	/// <summary>Scales every element by <paramref name="scalar"/>.</summary>
-	public Matrix Scale(double scalar)
+	public Matrix Scale(Real scalar)
 	{
 		var result = new Matrix(Rows, Cols);
 		for (var i = 0; i < _data.Length; i++)
@@ -194,7 +194,7 @@ public sealed class Matrix
 	}
 
 	/// <summary>Applies <paramref name="fn"/> to every element, returning a new matrix.</summary>
-	public Matrix Map(Func<double, double> fn)
+	public Matrix Map(Func<Real, Real> fn)
 	{
 		var result = new Matrix(Rows, Cols);
 		for (var i = 0; i < _data.Length; i++)

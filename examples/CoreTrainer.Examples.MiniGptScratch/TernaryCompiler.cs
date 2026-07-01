@@ -20,6 +20,12 @@ namespace CoreTrainer.Examples.MiniGptScratch;
 /// </remarks>
 public static class TernaryCompiler
 {
+	/// <summary>
+	/// Bytes of one training-precision value, for the full-precision size baseline: 8 for double or
+	/// the Fixed (long-backed) type, 4 for float. Uses the runtime size of the current <c>Real</c>.
+	/// </summary>
+	private static readonly int RealBytes = System.Runtime.CompilerServices.Unsafe.SizeOf<Real>();
+
 	/// <summary>Result of compiling: the size comparison and the learned sparsity.</summary>
 	public readonly record struct CompileReport(
 		long WeightCount,
@@ -62,7 +68,7 @@ public static class TernaryCompiler
 					zeroCount++;
 
 			var packed = Pack(trits);
-			packedBytes += packed.Length + sizeof(double); // packed trits + the one γ scale per tensor
+			packedBytes += packed.Length + RealBytes; // packed trits + the one γ scale per tensor
 
 			// Verify losslessness: unpacking must reproduce the trits exactly.
 			var restored = Unpack(packed, trits.Length);
@@ -71,7 +77,7 @@ public static class TernaryCompiler
 					throw new InvalidOperationException($"Ternary packing round-trip failed at index {i}.");
 		}
 
-		var fullPrecisionBytes = weightCount * sizeof(double);
+		var fullPrecisionBytes = weightCount * RealBytes;
 		return new CompileReport(weightCount, fullPrecisionBytes, packedBytes, zeroCount, layerCount);
 	}
 

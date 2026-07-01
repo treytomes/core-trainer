@@ -72,14 +72,20 @@ public sealed class AdamOptimizer
 
 			for (var i = 0; i < value.Length; i++)
 			{
-				var g = grad[i];
-				m[i] = _beta1 * m[i] + (1.0 - _beta1) * g;
-				v[i] = _beta2 * v[i] + (1.0 - _beta2) * g * g;
+				// The moment updates run in double for numerical stability (bias correction and the
+				// running variance are sensitive), then narrow back to Real when written to the
+				// parameter arrays — matching how BitNet keeps optimizer state higher-precision than
+				// the weights it updates.
+				double g = (double)grad[i];
+				var mi = _beta1 * (double)m[i] + (1.0 - _beta1) * g;
+				var vi = _beta2 * (double)v[i] + (1.0 - _beta2) * g * g;
+				m[i] = (Real)mi;
+				v[i] = (Real)vi;
 
-				var mHat = m[i] / biasCorrection1;
-				var vHat = v[i] / biasCorrection2;
+				var mHat = mi / biasCorrection1;
+				var vHat = vi / biasCorrection2;
 
-				value[i] -= _learningRate * mHat / (Math.Sqrt(vHat) + _epsilon);
+				value[i] -= (Real)(_learningRate * mHat / (Math.Sqrt(vHat) + _epsilon));
 			}
 		}
 	}

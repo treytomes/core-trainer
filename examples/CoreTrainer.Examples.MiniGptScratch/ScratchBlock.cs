@@ -128,7 +128,7 @@ public sealed class ScratchBlock
 	private static Parameter OnesRow(int dim)
 	{
 		var m = new Matrix(1, dim);
-		m.Fill(1.0);
+		m.Fill(1);
 		return new Parameter(m);
 	}
 

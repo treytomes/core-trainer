@@ -201,6 +201,21 @@ static void GradientCheck(ILogger log)
 {
 	log.LogInformation("=== Gradient check (analytic vs numerical) ===");
 
+	// Finite-difference checking is only meaningful in double precision. The central difference
+	// (L(w+h) − L(w−h)) / 2h subtracts two nearly-equal losses; in float (~1e-7 epsilon) that
+	// cancellation is pure noise for any usable step h, so the check would report a false failure —
+	// a fact about float arithmetic, not about the backprop. Since the alias makes the whole build
+	// one precision, we cannot spin up a double model here while the rest runs in float; so the check
+	// runs in double builds (validating the identical backprop math, precision free) and is skipped
+	// with a note in float builds. The math it validates is shared by both precisions.
+	if (typeof(Real) != typeof(double))
+	{
+		log.LogInformation("  SKIPPED: build precision is {Type}, not double. Finite differences need double —", typeof(Real).Name);
+		log.LogInformation("  in lower precision the central difference is lost to rounding/cancellation. The backprop");
+		log.LogInformation("  math is shared across precisions and is validated in a double build.");
+		return;
+	}
+
 	var rng = new Random(42);
 	// A tiny model + short sequence keeps the finite-difference sweep cheap. The check always uses
 	// full-precision Linear layers: a BitLinear cannot be finite-difference-checked, because a tiny
@@ -236,11 +251,11 @@ static void GradientCheck(ILogger log)
 		for (var i = 0; i < data.Length && checkm < 20; i += step)
 		{
 			var original = data[i];
-			var analytic = p.Grad.Data[i];
+			var analytic = (double)p.Grad.Data[i];
 
-			data[i] = original + h;
+			data[i] = (Real)((double)original + h);
 			var lossPlus = LossAt();
-			data[i] = original - h;
+			data[i] = (Real)((double)original - h);
 			var lossMinus = LossAt();
 			data[i] = original;
 

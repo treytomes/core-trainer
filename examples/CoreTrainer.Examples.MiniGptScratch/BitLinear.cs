@@ -58,7 +58,7 @@ public sealed class BitLinear : ILinearLayer
 		var scale = Math.Sqrt(2.0 / inputDim);
 		var w = new Matrix(inputDim, outputDim);
 		for (var i = 0; i < w.Data.Length; i++)
-			w.Data[i] = NextGaussian(init) * scale;
+			w.Data[i] = (Real)(NextGaussian(init) * scale);
 		Weight = new Parameter(w);
 
 		_hasBias = hasBias;
@@ -102,7 +102,7 @@ public sealed class BitLinear : ILinearLayer
 		var effective = new Matrix(Weight.Value.Rows, Weight.Value.Cols);
 		var eff = effective.Data;
 		for (var i = 0; i < trits.Length; i++)
-			eff[i] = trits[i] * gamma;
+			eff[i] = (Real)(trits[i] * gamma);
 		_effectiveWeight = effective;
 
 		var y = x.MatMul(effective);
@@ -120,14 +120,14 @@ public sealed class BitLinear : ILinearLayer
 		var latent = Weight.Value.Data;
 		var absSum = 0.0;
 		for (var i = 0; i < latent.Length; i++)
-			absSum += Math.Abs(latent[i]);
+			absSum += Math.Abs((double)latent[i]);
 		var gamma = absSum / latent.Length;
 		var inv = 1.0 / (gamma + Epsilon);
 
 		var trits = new sbyte[latent.Length];
 		for (var i = 0; i < latent.Length; i++)
 		{
-			var t = Math.Round(latent[i] * inv, MidpointRounding.AwayFromZero);
+			var t = Math.Round((double)latent[i] * inv, MidpointRounding.AwayFromZero);
 			trits[i] = t > 1.0 ? (sbyte)1 : t < -1.0 ? (sbyte)-1 : (sbyte)t;
 		}
 		return (trits, gamma);
