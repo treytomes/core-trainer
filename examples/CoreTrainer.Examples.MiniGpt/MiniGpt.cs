@@ -37,7 +37,10 @@ public sealed class MiniGpt : nn.Module<Tensor, Tensor>
 	/// <param name="embedDim">Embedding/model dimension.</param>
 	/// <param name="heads">Attention heads per block.</param>
 	/// <param name="layers">Number of stacked transformer blocks.</param>
-	public MiniGpt(int vocabSize, int blockSize, int embedDim, int heads, int layers)
+	/// <param name="mlpMode">Feed-forward variant for every block: GELU (baseline) or a logic-gate network.</param>
+	/// <param name="logicTemperature">Softmax/anneal temperature for the logic MLP variants.</param>
+	public MiniGpt(int vocabSize, int blockSize, int embedDim, int heads, int layers,
+		MlpMode mlpMode = MlpMode.Gelu, double logicTemperature = 1.0)
 		: base(nameof(MiniGpt))
 	{
 		_blockSize = blockSize;
@@ -46,7 +49,7 @@ public sealed class MiniGpt : nn.Module<Tensor, Tensor>
 
 		var blockModules = new List<nn.Module<Tensor, Tensor>>();
 		for (var i = 0; i < layers; i++)
-			blockModules.Add(new TransformerBlock(embedDim, heads));
+			blockModules.Add(new TransformerBlock(embedDim, heads, mlpMode, logicTemperature));
 		_blocks = nn.Sequential(blockModules);
 
 		_lnFinal = nn.LayerNorm(embedDim);
@@ -61,6 +64,21 @@ public sealed class MiniGpt : nn.Module<Tensor, Tensor>
 
 	/// <summary>Maximum context length the model can attend over.</summary>
 	public int BlockSize => _blockSize;
+
+	#endregion
+
+	#region Logic temperature
+
+	/// <summary>
+	/// Sets the softmax/anneal temperature on every block's logic feed-forward (no-op for GELU blocks).
+	/// Called each epoch by the trainer to anneal the logic variants from hot to cold.
+	/// </summary>
+	public void SetLogicTemperature(double temperature)
+	{
+		foreach (var block in _blocks.children())
+			if (block is TransformerBlock tb)
+				tb.SetLogicTemperature(temperature);
+	}
 
 	#endregion
 

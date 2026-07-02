@@ -21,28 +21,56 @@ public sealed class TransformerBlock : nn.Module<Tensor, Tensor>
 	private readonly LayerNorm _ln1;
 	private readonly CausalSelfAttention _attention;
 	private readonly LayerNorm _ln2;
-	private readonly Sequential _mlp;
+	private readonly nn.Module<Tensor, Tensor> _mlp;
 
 	#endregion
 
 	#region Constructors
 
-	public TransformerBlock(int embedDim, int heads) : base(nameof(TransformerBlock))
+	/// <param name="mlpMode">
+	/// Which feed-forward to use: the standard GELU MLP, or a differentiable logic-gate network (soft or
+	/// hard). The logic variants expand to 4·embedDim (matching the MLP's hidden width) and use a stack
+	/// of logic layers in place of the GELU nonlinearity.
+	/// </param>
+	/// <param name="logicTemperature">Softmax/anneal temperature for the logic variants (ignored for GELU).</param>
+	public TransformerBlock(int embedDim, int heads, MlpMode mlpMode = MlpMode.Gelu, double logicTemperature = 1.0)
+		: base(nameof(TransformerBlock))
 	{
 		_ln1 = nn.LayerNorm(embedDim);
 		_attention = new CausalSelfAttention(embedDim, heads);
 		_ln2 = nn.LayerNorm(embedDim);
-		_mlp = nn.Sequential(
-			nn.Linear(embedDim, 4 * embedDim),
-			nn.GELU(),
-			nn.Linear(4 * embedDim, embedDim));
+		_mlp = BuildMlp(embedDim, mlpMode, logicTemperature);
 
 		RegisterComponents();
+	}
+
+	// The feed-forward sub-layer. GELU is the conventional MLP; the logic modes swap the nonlinearity for
+	// a logic-gate network, keeping the same 4·embedDim hidden width so parameter budgets are comparable.
+	private static nn.Module<Tensor, Tensor> BuildMlp(int embedDim, MlpMode mode, double temperature)
+	{
+		var hidden = 4 * embedDim;
+		if (mode == MlpMode.Gelu)
+			return nn.Sequential(
+				nn.Linear(embedDim, hidden),
+				nn.GELU(),
+				nn.Linear(hidden, embedDim));
+
+		// A few logic layers over the expanded width. Depth gives the gate network room to compose;
+		// width (= hidden) gives its learned wiring enough signals to route.
+		var logicWidths = new[] { hidden, hidden, hidden };
+		return new LogicFeedForward(embedDim, hidden, logicWidths, hard: mode == MlpMode.LogicHard, temperature);
 	}
 
 	#endregion
 
 	#region Methods
+
+	/// <summary>Forwards a logic-temperature update to the MLP if it is a logic feed-forward (else no-op).</summary>
+	public void SetLogicTemperature(double temperature)
+	{
+		if (_mlp is LogicFeedForward logic)
+			logic.SetTemperature(temperature);
+	}
 
 	/// <summary>
 	/// Runs the block over a batch of sequences (shape <c>[batch, time, embedDim]</c>), returning the

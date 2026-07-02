@@ -41,6 +41,10 @@ const int EPOCHS = 3000;
 const double LEARNING_RATE = 3e-4;
 const int LOG_EVERY = 200;
 const int SEED = 1;
+// Logic-MLP temperature anneal (ignored by the GELU baseline): hot start = smooth gate/wire blends and
+// easy gradients; cold end = selections near one-hot so the soft net approaches its hard circuit.
+const double TEMP_START = 2.0;
+const double TEMP_END = 0.1;
 
 using var loggerFactory = CreateLoggerFactory();
 var log = loggerFactory.CreateLogger("MiniGpt");
@@ -64,64 +68,93 @@ log.LogInformation("Train:    {Examples} windows, Adam lr {Lr}, {Epochs} epochs"
 
 // Model vocabulary includes the reserved pad id (index tokenizer.VocabSize), so logits cover it.
 var modelVocab = tokenizer.VocabSize + 1;
-var model = new MiniGpt(modelVocab, BLOCK_SIZE, EMBED_DIM, HEADS, LAYERS);
-var optimizer = optim.Adam(model.parameters(), lr: LEARNING_RATE);
-// ignore_index = padId: padded target positions contribute nothing to the loss, so the model is
-// trained only on real next-token predictions, not on producing padding.
-var lossFn = nn.CrossEntropyLoss(ignore_index: padId);
 
-for (var epoch = 0; epoch < EPOCHS; epoch++)
-{
-	model.train();
-	optimizer.zero_grad();
+// Run all three feed-forward variants under identical conditions so the comparison is clean: the same
+// corpus, seed, epochs, and LR — only the block's nonlinearity differs. GELU is the baseline; the logic
+// variants swap in a differentiable logic-gate network (soft = fully differentiable, hard = STE circuit).
+var modes = new[] { MlpMode.Gelu, MlpMode.LogicSoft, MlpMode.LogicHard };
+var summary = new List<(MlpMode Mode, double FinalLoss, int Passed)>();
 
-	var logits = model.forward(inputs);                       // [examples, block, vocab]
-															  // Cross-entropy wants [N, vocab] logits vs [N] targets; flatten the batch and time axes.
-	var flatLogits = logits.reshape(-1, modelVocab);
-	var flatTargets = targets.reshape(-1);
-	var loss = lossFn.forward(flatLogits, flatTargets);
+foreach (var mode in modes)
+	summary.Add(RunMode(mode));
 
-	loss.backward();
-	optimizer.step();
-
-	if (epoch == 0 || (epoch + 1) % LOG_EVERY == 0)
-		log.LogInformation("  epoch {Epoch,5}/{Total}   loss {Loss:0.0000}", epoch + 1, EPOCHS, loss.item<float>());
-}
-
-// === Test memorization ===============================================================
-// Prompt the model with the first few characters of each sentence and let it generate the rest
-// greedily. If it memorized the corpus, the generated continuation matches the original verbatim.
-log.LogInformation("=== Memorization test (prompt -> greedy continuation) ===");
-var passed = 0;
-foreach (var sentence in sentences)
-{
-	// Use the first 10 characters as the prompt; generate enough to cover the rest plus the newline.
-	var promptText = sentence[..Math.Min(10, sentence.Length)];
-	var promptIds = tokenizer.Encode(promptText).ToArray();
-	var prompt = tensor(promptIds, dtype: ScalarType.Int64).reshape(1, promptIds.Length);
-
-	var generated = model.Generate(prompt, maxNewTokens: sentence.Length - promptText.Length + 1);
-	var generatedIds = generated.reshape(-1).data<long>().ToArray();
-	var decoded = tokenizer.Decode(generatedIds);
-
-	// The produced text up to (and excluding) the first newline is the model's sentence.
-	var newlineAt = decoded.IndexOf('\n');
-	var produced = newlineAt >= 0 ? decoded[..newlineAt] : decoded;
-
-	var ok = produced == sentence;
-	if (ok)
-		passed++;
-
-	log.LogInformation("  [{Mark}] prompt \"{Prompt}...\"", ok ? "PASS" : "FAIL", promptText);
-	log.LogInformation("        expected: {Expected}", sentence);
-	log.LogInformation("        produced: {Produced}", produced);
-}
-
-log.LogInformation("Memorization: {Passed}/{Total} sentences reproduced verbatim.", passed, sentences.Length);
-if (passed == sentences.Length)
-	log.LogInformation("SUCCESS: the model memorized every sentence.");
+// Side-by-side verdict. For a language task the bar is NOT an exact circuit (as it would be for a
+// standalone adder) but parity with the GELU baseline: comparable loss and memorization count.
+log.LogInformation("=== Feed-forward comparison ===");
+foreach (var (mode, finalLoss, passed) in summary)
+	log.LogInformation("  {Mode,-10}  final loss {Loss:0.0000}   memorized {Passed}/{Total}",
+		mode, finalLoss, passed, sentences.Length);
 
 return;
+
+// Builds, trains, and memorization-tests one model with the given feed-forward mode; returns its final
+// loss and memorization count. The logic modes anneal their softmax temperature from hot to cold across
+// training (like the standalone LogicMlp ladder) so wire/gate selections sharpen gradually; GELU ignores it.
+(MlpMode Mode, double FinalLoss, int Passed) RunMode(MlpMode mode)
+{
+	manual_seed(SEED); // reset per mode so every variant sees identical initialization draws
+	log.LogInformation("########## Feed-forward mode: {Mode} ##########", mode);
+
+	var model = new MiniGpt(modelVocab, BLOCK_SIZE, EMBED_DIM, HEADS, LAYERS, mode, TEMP_START);
+	var optimizer = optim.Adam(model.parameters(), lr: LEARNING_RATE);
+	// ignore_index = padId: padded target positions contribute nothing to the loss, so the model is
+	// trained only on real next-token predictions, not on producing padding.
+	var lossFn = nn.CrossEntropyLoss(ignore_index: padId);
+
+	var lastLoss = 0.0;
+	for (var epoch = 0; epoch < EPOCHS; epoch++)
+	{
+		// Anneal logic temperature geometrically (no-op for GELU). Hot early = smooth blends and easy
+		// gradients; cold late = selections near one-hot so soft training approaches the hard circuit.
+		if (mode != MlpMode.Gelu)
+		{
+			var progress = (double)epoch / (EPOCHS - 1);
+			model.SetLogicTemperature(TEMP_START * Math.Pow(TEMP_END / TEMP_START, progress));
+		}
+
+		model.train();
+		optimizer.zero_grad();
+
+		var logits = model.forward(inputs);                   // [examples, block, vocab]
+		var flatLogits = logits.reshape(-1, modelVocab);      // CE wants [N, vocab] vs [N] targets
+		var flatTargets = targets.reshape(-1);
+		var loss = lossFn.forward(flatLogits, flatTargets);
+
+		loss.backward();
+		optimizer.step();
+
+		lastLoss = loss.item<float>();
+		if (epoch == 0 || (epoch + 1) % LOG_EVERY == 0)
+			log.LogInformation("  epoch {Epoch,5}/{Total}   loss {Loss:0.0000}", epoch + 1, EPOCHS, lastLoss);
+	}
+
+	// Memorization test: prompt each sentence's opening and greedily generate the rest; a memorized
+	// corpus reproduces each verbatim.
+	log.LogInformation("=== [{Mode}] Memorization test ===", mode);
+	var passed = 0;
+	foreach (var sentence in sentences)
+	{
+		var promptText = sentence[..Math.Min(10, sentence.Length)];
+		var promptIds = tokenizer.Encode(promptText).ToArray();
+		var prompt = tensor(promptIds, dtype: ScalarType.Int64).reshape(1, promptIds.Length);
+
+		var generated = model.Generate(prompt, maxNewTokens: sentence.Length - promptText.Length + 1);
+		var generatedIds = generated.reshape(-1).data<long>().ToArray();
+		var decoded = tokenizer.Decode(generatedIds);
+
+		var newlineAt = decoded.IndexOf('\n');
+		var produced = newlineAt >= 0 ? decoded[..newlineAt] : decoded;
+
+		var ok = produced == sentence;
+		if (ok)
+			passed++;
+		log.LogInformation("  [{Mark}] \"{Prompt}...\" -> {Produced}", ok ? "PASS" : "FAIL", promptText, produced);
+	}
+	log.LogInformation("[{Mode}] Memorization: {Passed}/{Total}", mode, passed, sentences.Length);
+
+	model.Dispose();
+	return (mode, lastLoss, passed);
+}
 
 // === Helpers ===========================================================================
 

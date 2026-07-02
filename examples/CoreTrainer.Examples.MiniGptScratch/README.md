@@ -33,9 +33,11 @@ a transformer actually needs*.
 
 Two orthogonal levers, plus BitNet-style ternary weights, all composable:
 
-- **Precision** (`Real` alias): `double`, `float`, or **`Fixed`** — a hand-built fixed-point
-  type (a signed integer at scale `2^F`, i.e. "integer with a scale", the same idea as the
-  ternary weights generalized to a full number type).
+- **Precision** (`Real` alias): `double`, `float`, **`Fixed`** (64-bit), or **`Fixed32`**
+  (32-bit) — hand-built fixed-point types (a signed integer at scale `2^F`, i.e. "integer with a
+  scale", the same idea as the ternary weights generalized to a full number type). `Fixed32`'s
+  multiply maps onto a single native SIMD instruction (`vpmuldq` / `vmull_s32`), which is the
+  whole reason to drop from 64 to 32 bits.
 - **Ternary weights** (`UseBitLinear` in [appsettings.yaml](appsettings.yaml)): BitNet-b1.58
   `{-1, 0, +1}` block weights, trained with latent full-precision weights + straight-through
   estimator, exported by a "compile" step that packs 5 trits/byte (~1.6 bits/weight, ~40×
@@ -78,14 +80,71 @@ explodes the weights by ~1e8. Keeping optimizer state at higher precision than t
 updates is exactly the discipline real mixed-precision training uses — and here it is the
 difference between a working fixed-point transformer and one that diverges on the first step.
 
+### Pushing to 32-bit: `Fixed32`
+
+The natural next question after "it trains in 64-bit integers" is *how low can the bit-width
+go?* `Fixed32` is the 32-bit sibling of `Fixed`: half the storage, and a multiply that fits a
+native `int32×int32→int64` instruction. The catch is a far tighter range/grain budget — only 32
+bits total, so `F` fractional bits leave `31−F` integer bits (`|value| < 2^(31−F)`).
+
+Getting a transformer to train at 32-bit fixed-point required four techniques, each fixing a
+*measured* failure (not a guessed one — see the diagnostics below). All are standard low-precision
+training discipline, rediscovered here from first principles:
+
+- **QK-normalization** — LayerNorm on Q and K before the attention dot product, bounding the
+  logits so they cannot overflow the small integer range (the same trick Gemma-2 uses). Without
+  it, attention scores grew to fill the range and overflowed.
+- **Masked softmax** (`SoftmaxRows` with per-row valid counts) — the causal mask skips future
+  cells by *count* instead of writing a `−∞` sentinel, removing the "sentinel minus row-max"
+  subtraction that overflowed the low range.
+- **Gradient clipping at the source** — LayerNorm's backward multiplies by `1/std`, which spikes
+  when a normalized row has near-zero variance. Clamping each `LayerNormBackward` output to a
+  fixed limit *before* it enters a residual `Add` (not after — the spiked operand overflows
+  inside the Add itself) contains it. Inert in double/float, where gradients sit well within range.
+- **Wide-accumulator dot products** (`Mac`) — "compute low, accumulate high": dot products sum
+  their `int32×int32` products in a 64-bit register at doubled fractional width (`F=32`) and
+  narrow to the model grain *once*, instead of rounding every product before adding. This is the
+  textbook fp16-storage / fp32-accumulate rule; it is inert for double/float.
+
+**Result (as of this writing): partial.** With QK-norm + masked softmax + clipping + MAC:
+
+| F  | grain  | range   | outcome |
+|----|--------|---------|---------|
+| 16 | 1.5e-5 | ±32,768 | loss descends to ~0.6 then **thrashes** (0.6 ↔ 2.0); 0/5 memorized |
+| 18 | 3.8e-6 | ±8,192  | loss reaches ~0.07 but still **bounces**; **2/5** memorized — near the threshold |
+
+The clean **double control** (same seed, same LR=0.0005) memorizes 5/5 at loss 0.022, which
+proves the config is sound and the fault is genuinely `Fixed32`'s arithmetic. Finer grain (F=16→18)
+helped substantially, which pins **storage grain** — not accumulation, not update resolution — as
+the dominant remaining factor. Full 5/5 at 32-bit is **unresolved** (see *What remains*, below).
+
+### The load-bearing detail #2: gradient *direction*, not magnitude, is what degrades
+
+A satisfying dead-end worth recording. Two natural theories for the F=16 thrashing — *(a)* Adam's
+updates round below the grain and freeze, *(b)* the incoming gradients round below the grain — were
+both **disproven by direct measurement.** An update/gradient grain histogram (`AdamUpdateStats`,
+logged each epoch as `frozen / ±1grain / resolvable`) showed gradients stayed ~99% resolvable and
+updates stayed ~85% resolvable *while the loss climbed*. The histograms measure **magnitude**; the
+corruption is in **direction** — thousands of tiny `F=16` rounding errors compounding through the
+forward/backward pass so the net gradient points slightly wrong, which Adam then faithfully
+normalizes into a confident wrong-way step. (Amusingly, the double control revealed that
+update-collapse to the grain floor is the signature of *healthy convergence*, not failure — near a
+minimum the true update genuinely is sub-grain.)
+
 ### Diagnostics worth stealing
 
 Debugging fixed-point overflow taught a repeatable lesson: **make the code report the actual
 values instead of theorizing.** The `Fixed` multiply is `checked` (a range violation throws
-loudly rather than wrapping silently) and surfaces the operand *values* in the exception; an
-unhandled-exception handler logs the max `|Raw|` reached before a crash. Together these turned
-"it crashes somewhere" into "it's `-9M × -12M` in the Q·K product after one Adam step" — which
-pinned the optimizer-precision bug immediately.
+loudly rather than wrapping silently) and surfaces the operand *values* in the exception; the
+`Fixed32` operators do the same via an explicit int64 range test; an unhandled-exception handler
+logs the max `|Raw|` reached before a crash. Together these turned "it crashes somewhere" into
+"it's `-9M × -12M` in the Q·K product after one Adam step" — which pinned the optimizer-precision
+bug immediately. The same discipline (measure, don't theorize) resolved the F=16 thrashing above:
+three plausible theories died to the grain histogram and the double control before the real cause
+(direction error from accumulated rounding) was identified.
+
+Each run writes its own timestamped log under `logs/mini-gpt-scratch-<yyyyMMdd-HHmmss>.log`
+(configured in `Program.cs`), so successive experiments no longer stack into one file.
 
 ### Other performance levers (for scaling up)
 
@@ -98,3 +157,41 @@ pinned the optimizer-precision bug immediately.
   saves. Its payoff grows with head count and sequence length.
 - **Cached quantization**: a `BitLinear`'s ternarized/transposed weights are recomputed once per
   optimizer step (when weights change), not once per forward pass.
+
+---
+
+## What remains to be researched
+
+The project is parked here in a working state (64-bit fixed-point trains 5/5; 32-bit is close but
+not there). Open threads, roughly in order of promise:
+
+1. **Close the 32-bit gap.** F=18 reaches 2/5 and F=16 fails, so the lever is grain, not range or
+   accumulation. Two untried moves:
+   - **`Fixed32` at F=20** (grain 9.5e-7, the value that works in 64-bit) — but range shrinks to
+     ±2048, so the QK-norm / clipping guards would be under real pressure. Worth trying now that
+     those guards exist; watch for overflow.
+   - **Convert the deferred backward scatter-adds** (`dV`, `dQn`, `dKn` in
+     [ScratchSelfAttention.cs](ScratchSelfAttention.cs)) to wide accumulation. They accumulate
+     across an outer loop into shared cells and were left at `Real` precision when the `Mac` fix
+     went in (they need per-head wide buffers). If direction-error from *these* sums is
+     significant, cleaning them may be what tips F=18 over to 5/5. Measure first.
+   - **A `double` master-weight copy** in the optimizer (accumulate the full-precision update,
+     round to `Fixed32` for forward/backward). Standard mixed-precision; not yet needed given the
+     grain finding, but the obvious fallback if finer `F` alone can't close it.
+
+2. **Isolate the nonlinearity tables.** GELU/softmax/`tanh` run through `F`-grain lookup tables
+   (`Fixed32Math`, `Fixed32LookupTable`). Their contribution to the direction error is unmeasured;
+   a run with double-precision transcendentals but `Fixed32` everywhere else would bound it.
+
+3. **Scale the corpus.** All results are on 5 memorized sentences. Whether the fixed-point findings
+   hold on a larger corpus (generalization, not memorization) is untested.
+
+4. **Confirm the SIMD payoff.** `Fixed32`'s reason to exist is the native `int32×int32→int64`
+   multiply. The wall-clock win over `Fixed`/`double` has not been benchmarked; the matmul is the
+   place to measure it.
+
+5. **A different perceptron.** The ternary-weight work points at a broader question the sibling
+   `LogicMlp` example takes up: replace the MLP's linear-sum-plus-nonlinearity with a trainable
+   **logic network** (bipolar multilinear gates, learned by softmax-over-gate-types + STE), so the
+   knowledge lives in *which operation* each unit computes rather than *how much* of each input —
+   natively discrete and cullable, the logical endpoint of "weights trained to exactly zero."
