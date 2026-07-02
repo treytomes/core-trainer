@@ -1,0 +1,14 @@
+# Serilog configuration for the differentiable-logic-gate-network (LogicMlp) example. Mirrors the
+# format of the DiffNand and NAND-arithmetic examples so their logs are directly comparable.
+# NOTE: only the console sink is configured here; the file sink is added in code (Program.cs) with a
+# per-run timestamped filename, so successive runs do not stack into one day-rolling file.
+Serilog:
+  MinimumLevel:
+    Default: Information
+    Override:
+      Microsoft: Warning
+      System: Warning
+  WriteTo:
+    - Name: Console
+      Args:
+        outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}"
