@@ -28,19 +28,21 @@ var configuration = new ConfigurationBuilder()
 using var loggerFactory = CreateLoggerFactory(configuration);
 var log = loggerFactory.CreateLogger("MiniGptScratch");
 
-// If a fixed-point overflow (or anything else) crashes the run, still report the max |Raw| reached so
-// far — that is the diagnostic TrackRange exists for, and it is lost if the process dies silently. The
-// handler fires before the process terminates on an unhandled exception.
-if (Fixed.TrackRange)
+// Log the full exception (with stack trace) on any unhandled crash — e.g. a fixed-point `checked`
+// overflow — since it otherwise only reaches stderr and is lost. For the 64-bit Fixed build with range
+// tracking on, also report the max |Raw| reached (the TrackRange diagnostic); Fixed32 has no tracker,
+// so the stack trace alone pinpoints an int32 overflow there.
 {
 	AppDomain.CurrentDomain.UnhandledException += (_, e) =>
 	{
-		var maxAbs = Fixed.MaxAbsRaw;
 		var ex = e.ExceptionObject as Exception;
-		log.LogError("CRASH: Max |Raw| reached before crash: {Raw:N0} (value {Val:0.###} at F={F}).",
-			maxAbs, (double)maxAbs / (1L << Fixed.FractionalBits), Fixed.FractionalBits);
-		// Full exception incl. stack trace, so the crashing line is pinned in the log (it otherwise
-		// only reaches stderr and is lost).
+		if (typeof(Real) == typeof(Fixed) && Fixed.TrackRange)
+		{
+			var maxAbs = Fixed.MaxAbsRaw;
+			log.LogError("CRASH: Max |Raw| reached before crash: {Raw:N0} (value {Val:0.###} at F={F}).",
+				maxAbs, (double)maxAbs / (1L << Fixed.FractionalBits), Fixed.FractionalBits);
+		}
+		// Full exception incl. stack trace, so the crashing line is pinned in the log.
 		log.LogError(ex, "Unhandled exception");
 	};
 }
@@ -99,6 +101,14 @@ var rng = new Random(SEED);
 var model = new ScratchGpt(modelVocab, BLOCK_SIZE, EMBED_DIM, HEADS, LAYERS, rng, linearFactory);
 log.LogInformation("Linear layers: {Kind}", USE_BITLINEAR ? "BitLinear (ternary {-1,0,+1} weights)" : "Linear (full precision)");
 var optimizer = new AdamOptimizer(model.Parameters(), LEARNING_RATE);
+// Diagnostic: tally how applied updates land on the fixed-point grain lattice (frozen / ±1 grain /
+// resolvable), to test whether F=16 thrashing is update-resolution collapse near the minimum.
+var updateStats = new AdamUpdateStats();
+optimizer.UpdateStats = updateStats;
+// Companion diagnostic: the incoming gradient's grain distribution (before Adam normalizes it), to test
+// whether near a minimum the gradient direction degrades to rounding noise (the Boundary 1 theory).
+var gradientStats = new AdamUpdateStats();
+optimizer.GradientStats = gradientStats;
 
 log.LogInformation("=== Mini-GPT (from scratch) Trainer ===");
 log.LogInformation("Corpus:   {Sentences} sentences, {Chars} chars, vocab {Vocab}", sentences.Length, corpus.Length, tokenizer.VocabSize);
@@ -123,7 +133,18 @@ for (var epoch = 0; epoch < EPOCHS; epoch++)
 	optimizer.Step();
 
 	if (epoch == 0 || (epoch + 1) % LOG_EVERY == 0)
+	{
 		log.LogInformation("  epoch {Epoch,5}/{Total}   loss {Loss:0.0000}", epoch + 1, EPOCHS, epochLoss / examples.Count);
+		// Grain-lattice distribution. "grad" = incoming gradient direction quality (Boundary 1); "update"
+		// = applied step size (Boundary 2, already shown healthy). If grad's resolvable bucket collapses as
+		// the loss starts climbing, the direction has degraded to rounding noise.
+		log.LogInformation("           grad   {Stats}", gradientStats.Summary());
+		log.LogInformation("           update {Stats}", updateStats.Summary());
+	}
+	// Reset every epoch so each logged summary covers only that epoch's step (values recorded since the
+	// last log line would otherwise pile up unevenly across the LOG_EVERY gap).
+	updateStats.Reset();
+	gradientStats.Reset();
 }
 trainStopwatch.Stop();
 log.LogInformation("Training time: {Seconds:0.00} s ({PerEpoch:0.00} ms/epoch)",
@@ -200,18 +221,27 @@ if (USE_BITLINEAR)
 // the doubled-scale product a.Raw·b.Raw must fit in int64, so it is safe only while max|Raw| < ~3.03e9
 // (= sqrt(long.MaxValue)). It also shows how much of the representable range (±2^(63-F)) the model
 // uses — headroom that could instead buy more fraction bits (finer grain) by lowering F.
-if (Fixed.TrackRange)
+if (typeof(Real) == typeof(Fixed) && Fixed.TrackRange)
 {
 	var maxAbs = Fixed.MaxAbsRaw;
 	var maxValue = (double)maxAbs / (1L << Fixed.FractionalBits);
 	const double int64ProductLimit = 3_037_000_499; // floor(sqrt(long.MaxValue)) — max|Raw| for a safe int64 product
+	const double int32Limit = 2_147_483_648;        // 2^31 — max |Raw| that fits a signed 32-bit int
 	log.LogInformation("=== Fixed-point range (F={F}, Int64Only={Mode}) ===", Fixed.FractionalBits, Fixed.Int64Only);
 	log.LogInformation("  Max |Raw| observed: {Raw:N0}  (value {Val:0.###})", maxAbs, maxValue);
-	log.LogInformation("  Int64-safe limit for |Raw|: {Limit:N0}  ->  {Verdict}",
+	log.LogInformation("  Int64-product-safe limit for |Raw|: {Limit:N0}  ->  {Verdict}",
 		int64ProductLimit,
 		maxAbs < int64ProductLimit
-			? $"SAFE with {int64ProductLimit / Math.Max(1, maxAbs):0.0}x headroom (Int64Only holds at F={Fixed.FractionalBits})"
-			: "UNSAFE (products overflow int64 — lower F for more range, or keep Int128)");
+			? $"SAFE ({int64ProductLimit / Math.Max(1, maxAbs):0.0}x headroom)"
+			: "UNSAFE (products overflow int64 — lower F or keep Int128)");
+	// The decisive number for a 32-bit Fixed: does the raw value fit in a signed int32? A 32-bit type
+	// would store Raw as int32 and use an int64 multiply intermediate (32x32->64, which also SIMD-
+	// vectorizes natively) — so this verdict gates the whole Fixed32 / SIMD direction.
+	log.LogInformation("  Int32-storage limit for |Raw|:      {Limit:N0}  ->  {Verdict}",
+		int32Limit,
+		maxAbs < int32Limit
+			? $"FITS int32 ({int32Limit / Math.Max(1, maxAbs):0.0}x headroom) — Fixed32 viable at F={Fixed.FractionalBits}"
+			: $"OVERFLOWS int32 — Fixed32 needs a lower F (this run peaked at value {maxValue:0.#})");
 }
 
 return;
@@ -326,7 +356,12 @@ static void GradientCheck(ILogger log)
 // training, so this is the transcendental analogue of the gradient check.
 static void TranscendentalCheck(ILogger log)
 {
-	if (!Fixed.UseFixedTranscendentals)
+	// Only meaningful when a fixed-point build has the pure transcendentals enabled. Routes through
+	// RealMath (not a specific FixedMath), so it validates whichever fixed type — Fixed or Fixed32 —
+	// the Real alias currently is.
+	var fixedActive = (typeof(Real) == typeof(Fixed) && Fixed.UseFixedTranscendentals)
+		|| (typeof(Real) == typeof(Fixed32) && Fixed32.UseFixedTranscendentals);
+	if (!fixedActive)
 		return;
 
 	log.LogInformation("=== Fixed-point transcendental check (vs Math.*) ===");
@@ -336,7 +371,7 @@ static void TranscendentalCheck(ILogger log)
 	for (var i = 0; i <= 200; i++)
 	{
 		var xd = -20.0 + i * 20.0 / 200.0;
-		var got = (double)FixedMath.Exp((Fixed)xd);
+		var got = (double)RealMath.Exp((Real)xd);
 		maxExpErr = Math.Max(maxExpErr, Math.Abs(got - Math.Exp(xd)));
 	}
 
@@ -345,7 +380,7 @@ static void TranscendentalCheck(ILogger log)
 	for (var i = 0; i <= 200; i++)
 	{
 		var xd = i * 50.0 / 200.0;
-		var got = (double)FixedMath.Sqrt((Fixed)xd);
+		var got = (double)RealMath.Sqrt((Real)xd);
 		maxSqrtErr = Math.Max(maxSqrtErr, Math.Abs(got - Math.Sqrt(xd)));
 	}
 
@@ -354,12 +389,12 @@ static void TranscendentalCheck(ILogger log)
 	for (var i = 0; i <= 200; i++)
 	{
 		var xd = -8.0 + i * 16.0 / 200.0;
-		var got = (double)FixedMath.Tanh((Fixed)xd);
+		var got = (double)RealMath.Tanh((Real)xd);
 		maxTanhErr = Math.Max(maxTanhErr, Math.Abs(got - Math.Tanh(xd)));
 	}
 
-	log.LogInformation("  max abs error — exp: {Exp:0.###E+0}, sqrt: {Sqrt:0.###E+0}, tanh: {Tanh:0.###E+0} (F={F})",
-		maxExpErr, maxSqrtErr, maxTanhErr, Fixed.FractionalBits);
+	log.LogInformation("  max abs error — exp: {Exp:0.###E+0}, sqrt: {Sqrt:0.###E+0}, tanh: {Tanh:0.###E+0}",
+		maxExpErr, maxSqrtErr, maxTanhErr);
 	var worst = Math.Max(maxExpErr, Math.Max(maxSqrtErr, maxTanhErr));
 	if (worst < 1e-2)
 		log.LogInformation("  PASS: fixed-point transcendentals track Math.* within tolerance.");
@@ -369,8 +404,18 @@ static void TranscendentalCheck(ILogger log)
 
 static ILoggerFactory CreateLoggerFactory(IConfiguration configuration)
 {
+	// Console sink + minimum levels come from YAML (ReadFrom.Configuration). The file sink is added
+	// HERE, in code, with a per-run timestamped filename — one log file per run instead of the old
+	// day-rolling file that stacked every run of the day into a single unreadable log. The path is
+	// stamped once at startup so the whole run writes to it.
+	var runStamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+	var logPath = Path.Combine(AppContext.BaseDirectory, "logs", $"mini-gpt-scratch-{runStamp}.log");
+
 	var serilogLogger = new Serilog.LoggerConfiguration()
 		.ReadFrom.Configuration(configuration)
+		.WriteTo.File(
+			path: logPath,
+			outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
 		.CreateLogger();
 
 	return new SerilogLoggerFactory(serilogLogger, dispose: true);

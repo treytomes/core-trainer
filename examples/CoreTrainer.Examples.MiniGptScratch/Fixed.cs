@@ -64,7 +64,7 @@ public readonly struct Fixed : IEquatable<Fixed>
 	/// is safe). Adds an interlocked update to the hottest path, so it distorts timing — enable it for a
 	/// measurement run, not a performance run. When false the JIT drops the tracking entirely.
 	/// </summary>
-	public static readonly bool TrackRange = false;
+	public static readonly bool TrackRange = true;
 
 	/// <summary>
 	/// When true, the transcendentals (exp/sqrt/tanh) used on the runtime path run in PURE fixed-point
@@ -74,6 +74,15 @@ public readonly struct Fixed : IEquatable<Fixed>
 	/// against. Only meaningful when <c>Real</c> is <see cref="Fixed"/>; ignored for double/float.
 	/// </summary>
 	public static readonly bool UseFixedTranscendentals = true;
+
+	/// <summary>
+	/// When true (and <see cref="UseFixedTranscendentals"/> is on), the fixed-point transcendentals use
+	/// precomputed <see cref="FixedLookupTable"/>s — each table is filled once at init (in double, a
+	/// one-time setup cost like weight initialization), and every runtime call becomes an index plus a
+	/// linear interpolation instead of a Taylor series / bit-by-bit iteration. This is how no-FPU
+	/// hardware accelerates exp/sqrt/tanh. When false, the exact series/iterative versions run instead.
+	/// </summary>
+	public static readonly bool UseLookupTables = true;
 
 	private static long _maxAbsRaw;
 

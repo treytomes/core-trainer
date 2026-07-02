@@ -2,17 +2,18 @@
 # memorize) lives in corpus.txt, one sentence per line.
 Training:
   # Model shape.
-  BlockSize: 64        # max context length (positions)
-  EmbedDim: 64         # embedding / model dimension
-  Heads: 4             # attention heads per block (must divide EmbedDim)
-  Layers: 2            # stacked transformer blocks
+  BlockSize: 64 # max context length (positions)
+  EmbedDim: 64 # embedding / model dimension
+  Heads: 4 # attention heads per block (must divide EmbedDim)
+  Layers: 2 # stacked transformer blocks
   # Optimization.
   Epochs: 2000
-  LearningRate: 0.003
+  # LearningRate: 0.003
+  LearningRate: 0.0005
   Seed: 1
   # Logging / measurement cadence.
-  LogEvery: 100        # epochs between loss log lines
-  InferenceReps: 20    # repeats of the full generation pass for a stable timing measurement
+  LogEvery: 100 # epochs between loss log lines
+  InferenceReps: 20 # repeats of the full generation pass for a stable timing measurement
   # Quantization: true = BitNet-b1.58 ternary {-1,0,+1} block weights, false = full-precision Linear.
   UseBitLinear: true
   # Parallelize the attention head loops when a head's work (~2·time²·headDim scalar ops) reaches this
@@ -30,13 +31,10 @@ Serilog:
     Override:
       Microsoft: Warning
       System: Warning
+  # Only the console sink is configured here. The file sink is added in code (Program.cs,
+  # CreateLoggerFactory) with a per-run timestamped filename — one log file per run — so runs no
+  # longer stack into a single day-rolling file.
   WriteTo:
     - Name: Console
       Args:
         outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}"
-    - Name: File
-      Args:
-        path: logs/mini-gpt-scratch-.log
-        rollingInterval: Day
-        retainedFileCountLimit: 7
-        outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}"

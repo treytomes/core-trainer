@@ -43,31 +43,39 @@ public static class FixedMath
 	// would overflow the Int64Only multiply) — masked attention cells legitimately want exp → 0.
 	private static readonly Fixed ExpUnderflow = (Fixed)(-30.0);
 
+	// Sqrt domain ceiling for the table (LayerNorm variance stays well under this). Beyond it the table
+	// clamps; sqrt of larger inputs is rare and falls back to the exact series path.
+	private const double SqrtTableHi = 64.0;
+
+	// Precomputed tables (built once at first use, in double). Domains match the accuracy-harness
+	// ranges: exp on [-30,0] (softmax args are <= 0), sqrt on [0,64], tanh on [0,10] (|x|, odd symmetry).
+	private static readonly Lazy<FixedLookupTable> ExpTable =
+		new(() => new FixedLookupTable(Math.Exp, -30.0, 0.0, 4096));
+	private static readonly Lazy<FixedLookupTable> SqrtTable =
+		new(() => new FixedLookupTable(Math.Sqrt, 0.0, SqrtTableHi, 4096));
+	private static readonly Lazy<FixedLookupTable> TanhTable =
+		new(() => new FixedLookupTable(Math.Tanh, 0.0, 10.0, 4096));
+
 	#endregion
 
 	#region Methods
 
-	/// <summary>
-	/// Fixed-point square root of a non-negative value. <c>sqrt(raw/2^F) = isqrt(raw·2^F)/2^F</c>, so
-	/// the raw result is the integer square root of the raw input shifted up by F.
-	/// </summary>
+	// Public entry points dispatch to a lookup table (fast: index + lerp) or the exact series/iterative
+	// version, per Fixed.UseLookupTables. Both are pure fixed-point at runtime; the table just moves the
+	// cost to a one-time init. Kept side by side so the two can be compared.
+
+	/// <summary>Fixed-point square root of a non-negative value.</summary>
 	public static Fixed Sqrt(Fixed x)
 	{
 		if (x.Raw <= 0)
 			return Fixed.Zero;
-
-		// raw << F must not overflow int64; for the O(1)-scale values sqrt is used on (LayerNorm
-		// variance) this holds comfortably at the F values in play.
-		var scaled = (ulong)x.Raw << Fixed.FractionalBits;
-		return Fixed.FromRaw((long)IntegerSqrt(scaled));
+		// The table covers the LayerNorm-variance range; fall back to the exact isqrt above its ceiling.
+		if (Fixed.UseLookupTables && x <= (Fixed)SqrtTableHi)
+			return SqrtTable.Value.Evaluate(x);
+		return SqrtSeries(x);
 	}
 
-	/// <summary>
-	/// Fixed-point exponential. Base-2 range reduction: <c>exp(x) = 2^(x/ln2) = 2^k · exp(f·ln2)</c>
-	/// where k is the integer part of <c>x/ln2</c> and f its fraction in [0,1); the fractional factor
-	/// is a short Taylor series and <c>2^k</c> is a bit shift. For positive x it returns
-	/// <c>1/exp(-x)</c> so the reduced argument stays bounded.
-	/// </summary>
+	/// <summary>Fixed-point exponential.</summary>
 	public static Fixed Exp(Fixed x)
 	{
 		if (x.Raw == 0)
@@ -76,29 +84,12 @@ public static class FixedMath
 			return Fixed.Zero; // underflows to sub-grain; also guards range reduction from the -inf sentinel
 		if (x.Raw > 0)
 			return Fixed.One / Exp(-x);
-
-		// x < 0 here. u = x/ln2 < 0; k = floor(u) (arithmetic shift floors toward -inf), frac in [0,1).
-		var u = x * InvLn2;
-		var k = u.Raw >> Fixed.FractionalBits;                 // floor, <= 0
-		var fracRaw = u.Raw - (k << Fixed.FractionalBits);     // u - k, in [0,1)
-		var t = Fixed.FromRaw(fracRaw) * Ln2;                  // back to natural units, in [0, ln2)
-
-		// exp(t) for small t in [0, ln2) via Taylor: 1 + t + t²/2 + t³/6 + t⁴/24 + t⁵/120.
-		var t2 = t * t;
-		var t3 = t2 * t;
-		var expT = Fixed.One + t + C2 * t2 + C3 * t3 + C4 * (t2 * t2) + C5 * (t2 * t3);
-
-		// Multiply by 2^k. k <= 0, so shift right by -k; underflow to 0 past the representable range.
-		var shift = (int)(-k);
-		if (shift >= 63)
-			return Fixed.Zero;
-		return Fixed.FromRaw(expT.Raw >> shift);
+		// x in (ExpUnderflow, 0): the table's domain exactly.
+		return Fixed.UseLookupTables ? ExpTable.Value.Evaluate(x) : ExpSeries(x);
 	}
 
 	/// <summary>
-	/// Fixed-point hyperbolic tangent. Uses the odd symmetry and the negative-exponent form
-	/// <c>tanh(|x|) = (1 − e^(−2|x|)) / (1 + e^(−2|x|))</c>, so the exponential argument is always
-	/// ≤ 0 and cannot overflow; saturates to ±1 beyond where it is within a grain of the limit.
+	/// Fixed-point hyperbolic tangent via odd symmetry, saturating to ±1 beyond the table domain.
 	/// </summary>
 	public static Fixed Tanh(Fixed x)
 	{
@@ -110,9 +101,45 @@ public static class FixedMath
 		if (ax > TanhSaturation)
 			return negative ? -Fixed.One : Fixed.One;
 
-		var e = Exp(-(ax + ax));                 // e^(-2|x|), argument ≤ 0
-		var result = (Fixed.One - e) / (Fixed.One + e);
+		var result = Fixed.UseLookupTables ? TanhTable.Value.Evaluate(ax) : TanhSeries(ax);
 		return negative ? -result : result;
+	}
+
+	/// <summary>
+	/// Exact square root by bit-by-bit integer isqrt: <c>sqrt(raw/2^F) = isqrt(raw·2^F)/2^F</c>.
+	/// </summary>
+	private static Fixed SqrtSeries(Fixed x)
+	{
+		var scaled = (ulong)x.Raw << Fixed.FractionalBits;
+		return Fixed.FromRaw((long)IntegerSqrt(scaled));
+	}
+
+	/// <summary>
+	/// Exact exponential (x in (-30, 0)) by base-2 range reduction plus a short Taylor series:
+	/// <c>exp(x) = 2^(x/ln2) = 2^k · exp(f·ln2)</c>, k = floor(x/ln2), f the fraction; 2^k is a shift.
+	/// </summary>
+	private static Fixed ExpSeries(Fixed x)
+	{
+		var u = x * InvLn2;
+		var k = u.Raw >> Fixed.FractionalBits;                 // floor, <= 0
+		var fracRaw = u.Raw - (k << Fixed.FractionalBits);     // u - k, in [0,1)
+		var t = Fixed.FromRaw(fracRaw) * Ln2;                  // back to natural units, in [0, ln2)
+
+		var t2 = t * t;
+		var t3 = t2 * t;
+		var expT = Fixed.One + t + C2 * t2 + C3 * t3 + C4 * (t2 * t2) + C5 * (t2 * t3);
+
+		var shift = (int)(-k);
+		if (shift >= 63)
+			return Fixed.Zero;
+		return Fixed.FromRaw(expT.Raw >> shift);
+	}
+
+	/// <summary>Exact tanh for non-negative input via the negative-exponent form (argument ≤ 0).</summary>
+	private static Fixed TanhSeries(Fixed ax)
+	{
+		var e = ExpSeries(-(ax + ax));           // e^(-2|x|), argument ≤ 0
+		return (Fixed.One - e) / (Fixed.One + e);
 	}
 
 	#endregion

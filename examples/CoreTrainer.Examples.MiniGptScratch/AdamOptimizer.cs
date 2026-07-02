@@ -36,6 +36,24 @@ public sealed class AdamOptimizer
 	private readonly double[][] _m;
 	private readonly double[][] _v;
 
+	/// <summary>
+	/// Optional diagnostics: when set, every applied weight update is tallied by how many Fixed32 grains
+	/// it lands on (0 = frozen, ±1 = overshoot floor, ≥2 = resolvable). Null in normal runs. Used to test
+	/// whether F=16 training thrashes because updates collapse onto the {0, ±1 grain} lattice near a
+	/// minimum — i.e. whether the problem is weight/update <i>resolution</i>, not Adam's own math.
+	/// </summary>
+	public AdamUpdateStats? UpdateStats { get; set; }
+
+	/// <summary>
+	/// Optional diagnostics: when set, every incoming gradient element is tallied by its magnitude in
+	/// Fixed32 grains, <b>before</b> Adam normalizes it. Tests the second theory — that near a minimum the
+	/// true gradient shrinks toward the grain floor, so its <i>direction</i> becomes rounding noise, which
+	/// Adam then confidently normalizes into a resolvable-sized step in the wrong direction. If a large
+	/// fraction of gradient elements fall to 0/±1 grain exactly as the loss starts climbing, the fault is
+	/// gradient resolution (Boundary 1), not update resolution (Boundary 2, already ruled out).
+	/// </summary>
+	public AdamUpdateStats? GradientStats { get; set; }
+
 	#endregion
 
 	#region Constructors
@@ -94,6 +112,10 @@ public sealed class AdamOptimizer
 			{
 				// Moments live in double so a tiny second moment (v ≈ g², often << the model grain)
 				// cannot round to zero and blow up the mHat/(sqrt(v)+eps) division on the next step.
+				// Measure the raw gradient's grain magnitude before it feeds the moments — if its direction
+				// is dominated by rounding (0/±1 grain), Adam still normalizes it into a confident step.
+				GradientStats?.Record(grad[i]);
+
 				double g = (double)grad[i];
 				m[i] = _beta1 * m[i] + (1.0 - _beta1) * g;
 				v[i] = _beta2 * v[i] + (1.0 - _beta2) * g * g;
@@ -103,7 +125,13 @@ public sealed class AdamOptimizer
 
 				// Only the applied update is narrowed to Real — the weights genuinely live at model
 				// precision, but the state that computed the update did not.
-				value[i] -= (Real)(_learningRate * mHat / (Math.Sqrt(vHat) + _epsilon));
+				var update = (Real)(_learningRate * mHat / (Math.Sqrt(vHat) + _epsilon));
+				value[i] -= update;
+
+				// Diagnostics: measure the update AS ROUNDED to the model's grain (not the double it was
+				// computed from), by reading the Fixed32 raw integer = update in grains. This is the exact
+				// step the weight actually took — the thing that either resolves or collapses to 0/±1.
+				UpdateStats?.Record(update);
 			}
 
 			p.MarkUpdated(); // weights changed: invalidate anything derived from them (e.g. cached quantization)

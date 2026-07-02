@@ -112,6 +112,11 @@ public sealed class ScratchBlock
 		var dLn2 = _fc1.Backward(dPreGelu);                            // into LN2 output
 		var dAfterAttnFromMlp = Ops.LayerNormBackward(
 			dLn2, _inputToLn2, _ln2Gamma.Value, _ln2Mean, _ln2InvStd, _ln2Gamma.Grad, _ln2Beta.Grad);
+		// Clip AT THE SOURCE: LayerNorm-backward can spike (1/std when a normalized row had near-zero
+		// variance) to the fixed-point ceiling. It must be clamped BEFORE entering the residual Add —
+		// clamping the sum afterward is too late, since the spiked operand overflows inside the Add
+		// itself. Harmless in double/float (values sit well within the limit).
+		Ops.ClipGradient(dAfterAttnFromMlp, Ops.GradientClipLimit);
 		// Identity branch + MLP branch.
 		var dAfterAttn = dOut.Add(dAfterAttnFromMlp);
 
@@ -120,6 +125,7 @@ public sealed class ScratchBlock
 		var dLn1 = _attention.Backward(dAttended);                     // into LN1 output
 		var dxFromAttn = Ops.LayerNormBackward(
 			dLn1, _inputToLn1, _ln1Gamma.Value, _ln1Mean, _ln1InvStd, _ln1Gamma.Grad, _ln1Beta.Grad);
+		Ops.ClipGradient(dxFromAttn, Ops.GradientClipLimit); // clip before the Add, same reason as above
 		// Identity branch (dAfterAttn) + attention branch.
 		return dAfterAttn.Add(dxFromAttn);
 	}

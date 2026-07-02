@@ -16,31 +16,70 @@ public static class Ops
 	private const double Epsilon = 1e-5;
 	private static readonly double GeluCoeff = Math.Sqrt(2.0 / Math.PI);
 
+	#region Gradient clipping
+
+	/// <summary>
+	/// Shared value limit for residual-stream gradient clipping. Far above any legitimate gradient
+	/// magnitude here, but well under the fixed-point range ceiling (±32768 at Fixed32/F=16), so it only
+	/// clamps the rare LayerNorm-backward 1/std spike that would otherwise overflow — and is inert in
+	/// double/float where gradients are tiny.
+	/// </summary>
+	public static readonly Real GradientClipLimit = (Real)256;
+
+	/// <summary>
+	/// Clamps every element of a gradient to <c>±limit</c>, in place. Value-based gradient clipping —
+	/// the standard guard against exploding gradients, and here also a hard requirement for low-range
+	/// fixed-point: LayerNorm's backward multiplies by <c>1/std</c>, which spikes when a normalized row
+	/// had near-zero variance, and unclamped that spike overflows a 32-bit fixed-point value. Applied to
+	/// the residual-stream gradients where the spike propagates. A no-op region for values already
+	/// within range, so it does not distort normal training.
+	/// </summary>
+	public static void ClipGradient(Matrix grad, Real limit)
+	{
+		var negLimit = -limit;
+		var data = grad.Data;
+		for (var i = 0; i < data.Length; i++)
+		{
+			if (data[i] > limit)
+				data[i] = limit;
+			else if (data[i] < negLimit)
+				data[i] = negLimit;
+		}
+	}
+
+	#endregion
+
 	#region Softmax
 
 	/// <summary>
 	/// Row-wise softmax: each row becomes a probability distribution. Subtracts the row max first for
 	/// numerical stability (does not change the result).
 	/// </summary>
-	public static Matrix SoftmaxRows(Matrix x)
+	public static Matrix SoftmaxRows(Matrix x, int[]? rowValidCounts = null)
 	{
 		var result = new Matrix(x.Rows, x.Cols);
 		for (var r = 0; r < x.Rows; r++)
 		{
+			// Columns [0, valid) participate; the rest are masked out to exactly 0. This replaces the
+			// old "-inf sentinel then exp" masking, which subtracted the sentinel from the row max and
+			// could overflow in low-range fixed-point. Masked cells never enter the max, exp, or sum.
+			var valid = rowValidCounts?[r] ?? x.Cols;
+
 			var max = RealMath.NegativeInfinity;
-			for (var c = 0; c < x.Cols; c++)
+			for (var c = 0; c < valid; c++)
 				max = RealMath.Max(max, x[r, c]);
 
 			Real sum = 0;
-			for (var c = 0; c < x.Cols; c++)
+			for (var c = 0; c < valid; c++)
 			{
 				var e = RealMath.Exp(x[r, c] - max);
 				result[r, c] = e;
 				sum += e;
 			}
 
-			for (var c = 0; c < x.Cols; c++)
+			for (var c = 0; c < valid; c++)
 				result[r, c] /= sum;
+			// Columns [valid, Cols) stay 0 (Matrix is zero-initialized).
 		}
 		return result;
 	}

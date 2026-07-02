@@ -30,8 +30,19 @@ public sealed class ScratchSelfAttention
 	private readonly ILinearLayer _qkv;   // fused projection to [Q | K | V], width 3·embedDim
 	private readonly ILinearLayer _proj;  // output projection
 
+	// QK-normalization keeps attention logits O(1) so they cannot grow unbounded and overflow low-range
+	// fixed-point. Each head's Q and K row (length headDim) is LayerNorm-normalized before the dot
+	// product, parameter-free (unit scale, zero shift), reusing the gradient-checked LayerNorm ops.
+	// Always on: benign in double/float, essential in Fixed32; being unconditional lets the double-mode
+	// gradient check validate the added backward.
+	private readonly Matrix _qkGamma; // [1, headDim] ones
+	private readonly Matrix _qkBeta;  // [1, headDim] zeros
+
 	// Saved forward activations for the backward pass.
-	private Matrix? _q, _k, _v;                 // [time, embedDim]
+	private Matrix? _qn, _kn, _v;               // POST-norm Q, K and (un-normalized) V, [time, embedDim]
+	private Matrix? _qRaw, _kRaw;               // PRE-norm Q, K, for the QK-norm backward
+	private double[][]? _qMean, _qInvStd;       // per-head LayerNorm stats for Q: [head][time]
+	private double[][]? _kMean, _kInvStd;       // per-head LayerNorm stats for K
 	private Matrix[]? _attnWeights;             // per head: [time, time]
 	private Matrix? _attnConcat;                // [time, embedDim] input to _proj
 	private int _time;
@@ -50,6 +61,11 @@ public sealed class ScratchSelfAttention
 		_scale = (Real)(1.0 / Math.Sqrt(_headDim));
 		_qkv = linear(embedDim, 3 * embedDim, init, true);
 		_proj = linear(embedDim, embedDim, init, true);
+
+		// Parameter-free QK-norm: unit scale, zero shift.
+		_qkGamma = new Matrix(1, _headDim);
+		_qkGamma.Fill((Real)1);
+		_qkBeta = new Matrix(1, _headDim);
 	}
 
 	#endregion
@@ -96,7 +112,15 @@ public sealed class ScratchSelfAttention
 		var embedDim = x.Cols;
 
 		var qkv = _qkv.Forward(x);                       // [time, 3·embedDim]
-		(_q, _k, _v) = SplitQkv(qkv, embedDim);
+		(_qRaw, _kRaw, _v) = SplitQkv(qkv, embedDim);
+
+		// Normalized Q/K (filled per head in ForwardHead) and per-head LayerNorm stats for backward.
+		_qn = new Matrix(_time, embedDim);
+		_kn = new Matrix(_time, embedDim);
+		_qMean = new double[_heads][];
+		_qInvStd = new double[_heads][];
+		_kMean = new double[_heads][];
+		_kInvStd = new double[_heads][];
 
 		_attnWeights = new Matrix[_heads];
 		_attnConcat = new Matrix(_time, embedDim);
@@ -118,35 +142,44 @@ public sealed class ScratchSelfAttention
 	{
 		var offset = h * _headDim;
 
-		// Scores[i,j] = (Q_i · K_j) · scale, then mask future (j > i) to -inf and softmax rows.
+		// QK-norm: LayerNorm this head's Q and K rows (over headDim) into the normalized buffers, saving
+		// stats for backward. This bounds the logits so they cannot overflow low-range fixed-point.
+		(_qMean![h], _qInvStd![h]) = NormalizeHeadSlice(_qRaw!, _qn!, offset);
+		(_kMean![h], _kInvStd![h]) = NormalizeHeadSlice(_kRaw!, _kn!, offset);
+
+		// Scores[i,j] = (Qn_i · Kn_j) · scale for j ≤ i (causal). Future cells (j > i) are left at 0 and
+		// excluded from the softmax via the per-row valid count — no -inf sentinel is written, which
+		// removes a whole overflow class in low-range fixed-point (the sentinel-minus-rowmax subtraction).
 		var scores = new Matrix(_time, _time);
+		var validCounts = new int[_time];
 		for (var i = 0; i < _time; i++)
 		{
-			for (var j = 0; j < _time; j++)
+			validCounts[i] = i + 1; // row i attends to columns 0..i
+			for (var j = 0; j <= i; j++)
 			{
-				if (j > i)
-				{
-					scores[i, j] = RealMath.NegativeInfinity;
-					continue;
-				}
-				Real dot = 0;
+				// Accumulate the raw Qn·Kn dot at doubled fractional width (Mac), then apply the 1/√d
+				// scale once. The wide accumulator both removes the per-term rounding that corrupts the
+				// gradient direction at low precision AND holds the unscaled dot without overflowing the
+				// fixed-point integer part — so the old per-term scale fold (needed only to keep the
+				// accumulator small) is no longer required, and scaling once is strictly more accurate.
+				var mac = new Mac();
 				for (var d = 0; d < _headDim; d++)
-					dot += _q![i, offset + d] * _k![j, offset + d];
-				scores[i, j] = dot * _scale;
+					mac.MultiplyAdd(_qn![i, offset + d], _kn![j, offset + d]);
+				scores[i, j] = mac.Result * _scale;
 			}
 		}
 
-		var weights = Ops.SoftmaxRows(scores);       // [time, time], rows sum to 1
+		var weights = Ops.SoftmaxRows(scores, validCounts); // [time, time], each row sums to 1 over 0..i
 		_attnWeights![h] = weights;
 
 		// Blend values: out_i = Σ_j weights[i,j] · V_j, written into this head's slice.
 		for (var i = 0; i < _time; i++)
 			for (var d = 0; d < _headDim; d++)
 			{
-				Real acc = 0;
+				var mac = new Mac();
 				for (var j = 0; j <= i; j++)
-					acc += weights[i, j] * _v![j, offset + d];
-				_attnConcat![i, offset + d] = acc;
+					mac.MultiplyAdd(weights[i, j], _v![j, offset + d]);
+				_attnConcat![i, offset + d] = mac.Result;
 			}
 	}
 
@@ -156,10 +189,10 @@ public sealed class ScratchSelfAttention
 	/// </summary>
 	public Matrix Backward(Matrix dOut)
 	{
-		if (_q is null || _k is null || _v is null || _attnWeights is null || _attnConcat is null)
+		if (_qn is null || _kn is null || _v is null || _attnWeights is null || _attnConcat is null)
 			throw new InvalidOperationException("Backward called before Forward.");
 
-		var embedDim = _q.Cols;
+		var embedDim = _qn.Cols;
 
 		// Back through the output projection to the concatenated attention output.
 		var dConcat = _proj.Backward(dOut);              // [time, embedDim]
@@ -207,31 +240,87 @@ public sealed class ScratchSelfAttention
 		{
 			for (var j = 0; j <= i; j++)
 			{
-				Real dw = 0;
+				// dw[i,j] = Σ_d dConcat·V is a clean per-cell dot — accumulate it wide (Mac), same as the
+				// forward dots. The dV scatter-add below accumulates across the i loop into a shared cell,
+				// not a per-cell dot, so it stays at Real precision for now (a known remaining compounding
+				// site, deferred with the other scatter-adds until measurement says it is needed).
+				var mac = new Mac();
 				for (var d = 0; d < _headDim; d++)
 				{
 					var g = dConcat[i, offset + d];
-					dw += g * _v![j, offset + d];
+					mac.MultiplyAdd(g, _v![j, offset + d]);
 					dV[j, offset + d] += weights[i, j] * g;
 				}
-				dWeights[i, j] = dw;
+				dWeights[i, j] = mac.Result;
 			}
 		}
 
 		// Back through the row-wise softmax to the (masked) scores.
 		var dScores = Ops.SoftmaxRowsBackward(dWeights, weights);
 
-		// Scores[i,j] = scale · Σ_d Q[i,d]·K[j,d]  ->  dQ, dK (only over unmasked j ≤ i).
+		// Scores[i,j] = scale · Σ_d Qn[i,d]·Kn[j,d]  ->  gradients w.r.t. the NORMALIZED Qn, Kn (over
+		// unmasked j ≤ i). Collected into small [time, headDim] buffers so they can then be routed back
+		// through the QK-norm LayerNorm to get gradients w.r.t. the raw Q, K.
+		var dQn = new Matrix(_time, _headDim);
+		var dKn = new Matrix(_time, _headDim);
 		for (var i = 0; i < _time; i++)
 			for (var j = 0; j <= i; j++)
 			{
 				var ds = dScores[i, j] * _scale;
 				for (var d = 0; d < _headDim; d++)
 				{
-					dQ[i, offset + d] += ds * _k![j, offset + d];
-					dK[j, offset + d] += ds * _q![i, offset + d];
+					dQn[i, d] += ds * _kn![j, offset + d];
+					dKn[j, d] += ds * _qn![i, offset + d];
 				}
 			}
+
+		// Back through QK-norm: dQn/dKn (w.r.t. normalized) -> dQ/dK (w.r.t. raw), via the
+		// gradient-checked LayerNormBackward on each head's raw slice. Parameter-free, so the γ/β grad
+		// buffers are scratch (discarded). Writes into this head's column slice of dQ/dK.
+		WriteHeadSliceBackward(_qRaw!, offset, _qMean![h], _qInvStd![h], dQn, dQ);
+		WriteHeadSliceBackward(_kRaw!, offset, _kMean![h], _kInvStd![h], dKn, dK);
+	}
+
+	/// <summary>
+	/// LayerNorm-normalizes rows over the <c>[offset, offset+headDim)</c> columns of <paramref name="src"/>
+	/// into <paramref name="dst"/> at the same offset, returning the per-row mean/inv-std stats. Reuses
+	/// the gradient-checked <see cref="Ops.LayerNorm"/> by copying the slice through a small buffer.
+	/// </summary>
+	private (double[] Mean, double[] InvStd) NormalizeHeadSlice(Matrix src, Matrix dst, int offset)
+	{
+		var slice = new Matrix(_time, _headDim);
+		for (var i = 0; i < _time; i++)
+			for (var d = 0; d < _headDim; d++)
+				slice[i, d] = src[i, offset + d];
+
+		var (normed, mean, invStd) = Ops.LayerNorm(slice, _qkGamma, _qkBeta);
+
+		for (var i = 0; i < _time; i++)
+			for (var d = 0; d < _headDim; d++)
+				dst[i, offset + d] = normed[i, d];
+
+		return (mean, invStd);
+	}
+
+	/// <summary>
+	/// Routes a normalized-slice gradient <paramref name="dNormed"/> back through the QK-norm LayerNorm
+	/// to the raw slice, adding the result into this head's column slice of <paramref name="dRawDst"/>.
+	/// </summary>
+	private void WriteHeadSliceBackward(Matrix src, int offset, double[] mean, double[] invStd, Matrix dNormed, Matrix dRawDst)
+	{
+		var slice = new Matrix(_time, _headDim);
+		for (var i = 0; i < _time; i++)
+			for (var d = 0; d < _headDim; d++)
+				slice[i, d] = src[i, offset + d];
+
+		// Scratch γ/β grads (QK-norm is parameter-free; these are discarded).
+		var gGrad = new Matrix(1, _headDim);
+		var bGrad = new Matrix(1, _headDim);
+		var dRaw = Ops.LayerNormBackward(dNormed, slice, _qkGamma, mean, invStd, gGrad, bGrad);
+
+		for (var i = 0; i < _time; i++)
+			for (var d = 0; d < _headDim; d++)
+				dRawDst[i, offset + d] += dRaw[i, d];
 	}
 
 	/// <summary>Splits a fused [time, 3·embedDim] projection into its Q, K, V slices.</summary>

@@ -119,14 +119,22 @@ public sealed class Matrix
 	private void MultiplyRow(int i, Matrix other, Matrix result)
 	{
 		var rowOffset = i * result.Cols;
-		for (var k = 0; k < Cols; k++)
+		var aRowOffset = i * Cols;
+		// Each output cell is a full dot product accumulated at doubled fractional width (see Mac) and
+		// narrowed once — instead of the naive "result += a*b" which rounds every product to the model
+		// grain and compounds K roundings into a gradient-direction error at low precision. The loop is
+		// j-outer / k-inner so each cell owns one accumulator; the zero-skip on `a` is preserved.
+		for (var j = 0; j < result.Cols; j++)
 		{
-			var a = _data[i * Cols + k];
-			if (a == default)
-				continue;
-			var otherOffset = k * other.Cols;
-			for (var j = 0; j < result.Cols; j++)
-				result._data[rowOffset + j] += a * other._data[otherOffset + j];
+			var mac = new Mac();
+			for (var k = 0; k < Cols; k++)
+			{
+				var a = _data[aRowOffset + k];
+				if (a == default)
+					continue;
+				mac.MultiplyAdd(a, other._data[k * other.Cols + j]);
+			}
+			result._data[rowOffset + j] = mac.Result;
 		}
 	}
 

@@ -134,6 +134,9 @@ public sealed class ScratchGpt
 		var dNormed = _head.Backward(dLogits);
 		var dx = Ops.LayerNormBackward(
 			dNormed, _finalNormInput, _lnfGamma.Value, _lnfMean, _lnfInvStd, _lnfGamma.Grad, _lnfBeta.Grad);
+		// Clip the final-LayerNorm gradient at the source before it enters the block stack — same
+		// 1/std-spike guard as inside the blocks (see ScratchBlock.Backward).
+		Ops.ClipGradient(dx, Ops.GradientClipLimit);
 
 		for (var i = _blocks.Length - 1; i >= 0; i--)
 			dx = _blocks[i].Backward(dx);
