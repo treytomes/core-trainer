@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using TorchSharp;
 using TorchSharp.Modules;
 using static TorchSharp.torch;
@@ -22,11 +23,11 @@ public sealed class MiniGpt : nn.Module<Tensor, Tensor>
 	#region Fields
 
 	private readonly int _blockSize;
-	private readonly Embedding _tokenEmbedding;
-	private readonly Embedding _positionEmbedding;
+	private readonly nn.Module<Tensor, Tensor> _tokenEmbedding;
+	private readonly nn.Module<Tensor, Tensor> _positionEmbedding;
 	private readonly Sequential _blocks;
 	private readonly LayerNorm _lnFinal;
-	private readonly Linear _head;
+	private readonly nn.Module<Tensor, Tensor> _head;
 
 	#endregion
 
@@ -39,21 +40,30 @@ public sealed class MiniGpt : nn.Module<Tensor, Tensor>
 	/// <param name="layers">Number of stacked transformer blocks.</param>
 	/// <param name="mlpMode">Feed-forward variant for every block: GELU (baseline) or a logic-gate network.</param>
 	/// <param name="logicTemperature">Softmax/anneal temperature for the logic MLP variants.</param>
+	/// <param name="useBitLinear">
+	/// Use BitNet ternary-weight linears in the transformer <b>blocks</b> (attention + MLP/logic).
+	/// </param>
+	/// <param name="useBitLinearIO">
+	/// Also ternarize the <b>I/O boundary</b> — the token/position embeddings and the LM head. BitNet
+	/// deliberately leaves these full precision (they are the most precision-sensitive layers); setting
+	/// this true is the aggressive "everything ternary" configuration, false is the standard BitNet recipe.
+	/// </param>
 	public MiniGpt(int vocabSize, int blockSize, int embedDim, int heads, int layers,
-		MlpMode mlpMode = MlpMode.Gelu, double logicTemperature = 1.0)
+		MlpMode mlpMode = MlpMode.Gelu, double logicTemperature = 1.0, bool useBitLinear = false,
+		bool useBitLinearIO = false)
 		: base(nameof(MiniGpt))
 	{
 		_blockSize = blockSize;
-		_tokenEmbedding = nn.Embedding(vocabSize, embedDim);
-		_positionEmbedding = nn.Embedding(blockSize, embedDim);
+		_tokenEmbedding = useBitLinearIO ? new BitEmbedding(vocabSize, embedDim) : nn.Embedding(vocabSize, embedDim);
+		_positionEmbedding = useBitLinearIO ? new BitEmbedding(blockSize, embedDim) : nn.Embedding(blockSize, embedDim);
 
 		var blockModules = new List<nn.Module<Tensor, Tensor>>();
 		for (var i = 0; i < layers; i++)
-			blockModules.Add(new TransformerBlock(embedDim, heads, mlpMode, logicTemperature));
+			blockModules.Add(new TransformerBlock(embedDim, heads, mlpMode, logicTemperature, useBitLinear));
 		_blocks = nn.Sequential(blockModules);
 
 		_lnFinal = nn.LayerNorm(embedDim);
-		_head = nn.Linear(embedDim, vocabSize, hasBias: false);
+		_head = Linears.Make(embedDim, vocabSize, useBitLinearIO, hasBias: false);
 
 		RegisterComponents();
 	}
@@ -78,6 +88,18 @@ public sealed class MiniGpt : nn.Module<Tensor, Tensor>
 		foreach (var block in _blocks.children())
 			if (block is TransformerBlock tb)
 				tb.SetLogicTemperature(temperature);
+	}
+
+	/// <summary>Reports the cullability (gate mix) of every block's logic feed-forward (no-op for GELU).</summary>
+	public void ReportLogicCullability(Microsoft.Extensions.Logging.ILogger log)
+	{
+		var layer = 0;
+		foreach (var block in _blocks.children())
+		{
+			if (block is TransformerBlock tb)
+				tb.ReportLogicCullability(log, $"block {layer}");
+			layer++;
+		}
 	}
 
 	#endregion

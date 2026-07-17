@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using TorchSharp;
 using TorchSharp.Modules;
 using static TorchSharp.torch;
@@ -36,8 +37,8 @@ public sealed class LogicFeedForward : nn.Module<Tensor, Tensor>
 	private double _temperature;
 	private readonly int[] _layerWidths;
 
-	private readonly Linear _encode;   // embedDim -> hidden (to logic inputs)
-	private readonly Linear _decode;   // final logic layer width -> embedDim
+	private readonly nn.Module<Tensor, Tensor> _encode;   // embedDim -> hidden (to logic inputs)
+	private readonly nn.Module<Tensor, Tensor> _decode;   // final logic layer width -> embedDim
 
 	// Per logic layer: two wire-selection logit matrices (poolSize, width) and gate-function logits
 	// (width, 16). Registered as Parameters so they live in the module's parameter tree and train.
@@ -57,15 +58,17 @@ public sealed class LogicFeedForward : nn.Module<Tensor, Tensor>
 	/// <param name="logicWidths">Gate count per logic layer; the last entry is the decode input width.</param>
 	/// <param name="hard">Hard (sign + argmax, STE) vs soft (tanh + softmax blend) logic.</param>
 	/// <param name="temperature">Softmax/anneal temperature for wire and gate selection.</param>
-	public LogicFeedForward(int embedDim, int hidden, int[] logicWidths, bool hard, double temperature)
+	/// <param name="useBitLinear">Use BitNet ternary-weight linears for the encode/decode boundary.</param>
+	public LogicFeedForward(int embedDim, int hidden, int[] logicWidths, bool hard, double temperature,
+		bool useBitLinear = false)
 		: base(nameof(LogicFeedForward))
 	{
 		_hard = hard;
 		_temperature = temperature;
 		_layerWidths = logicWidths;
 
-		_encode = nn.Linear(embedDim, hidden);
-		_decode = nn.Linear(logicWidths[^1], embedDim);
+		_encode = Linears.Make(embedDim, hidden, useBitLinear);
+		_decode = Linears.Make(logicWidths[^1], embedDim, useBitLinear);
 
 		_coeff = BipolarGateAlgebra.Coefficients();
 
@@ -99,6 +102,51 @@ public sealed class LogicFeedForward : nn.Module<Tensor, Tensor>
 
 	/// <summary>Sets the softmax/anneal temperature for wire and gate selection (called per epoch).</summary>
 	public void SetTemperature(double temperature) => _temperature = temperature;
+
+	// The 16 two-input Boolean gates by truth-table index. Constants (FALSE/TRUE) are dead structure;
+	// passthroughs (A/B) are pure wiring, not logic. Everything else is real logic.
+	private static readonly string[] GateNames =
+	{
+		"FALSE", "NOR", "A>B", "NOTB", "B>A", "NOTA", "XOR", "NAND",
+		"AND", "XNOR", "A", "B->A", "B", "A->B", "OR", "TRUE",
+	};
+
+	/// <summary>
+	/// Reports how much of the trained logic net is real logic versus prunable structure — the
+	/// cullability metric. For each gate, its committed function is the argmax of its (trained) gate
+	/// logits; a gate is a <b>constant</b> (FALSE/TRUE — dead, prunable) or a <b>passthrough</b> (A/B —
+	/// pure wiring) or real logic. This earns-or-refutes the "the MLP became cullable logic" claim.
+	/// </summary>
+	/// <remarks>
+	/// Meaningful for hard mode, where each node truly commits to its argmax gate. In soft mode the
+	/// argmax is only the dominant term of a 16-gate blend (the node is not that single gate), so treat
+	/// the soft numbers as indicative, not a literal circuit — hence the caller labels the mode.
+	/// </remarks>
+	public void ReportCullability(ILogger log, string label)
+	{
+		using var noGrad = no_grad();
+		var counts = new int[16];
+		int total = 0, constants = 0, passthroughs = 0;
+
+		for (var layer = 0; layer < _layerWidths.Length; layer++)
+		{
+			var choice = _gate[layer].argmax(1).data<long>().ToArray();
+			foreach (var f in choice)
+			{
+				counts[f]++;
+				total++;
+				if (f is 0 or 15) constants++;        // FALSE / TRUE
+				else if (f is 10 or 12) passthroughs++; // A / B
+			}
+		}
+
+		var logic = total - constants - passthroughs;
+		log.LogInformation("  [{Label}] logic-MLP cullability: {Total} gates — constants {Const} ({CPct:P0}), passthroughs {Pass} ({PPct:P0}), real logic {Logic} ({LPct:P0})",
+			label, total, constants, (double)constants / total, passthroughs, (double)passthroughs / total, logic, (double)logic / total);
+
+		var order = Enumerable.Range(0, 16).Where(k => counts[k] > 0).OrderByDescending(k => counts[k]);
+		log.LogInformation("  [{Label}] gate mix: {Mix}", label, string.Join(", ", order.Select(k => $"{GateNames[k]}={counts[k]}")));
+	}
 
 	/// <summary>Runs the block over <c>[batch, time, embedDim]</c>, returning the same shape.</summary>
 	public override Tensor forward(Tensor x)

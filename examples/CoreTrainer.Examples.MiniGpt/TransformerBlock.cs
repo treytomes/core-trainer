@@ -33,32 +33,34 @@ public sealed class TransformerBlock : nn.Module<Tensor, Tensor>
 	/// of logic layers in place of the GELU nonlinearity.
 	/// </param>
 	/// <param name="logicTemperature">Softmax/anneal temperature for the logic variants (ignored for GELU).</param>
-	public TransformerBlock(int embedDim, int heads, MlpMode mlpMode = MlpMode.Gelu, double logicTemperature = 1.0)
+	/// <param name="useBitLinear">Use BitNet ternary-weight linears throughout the block.</param>
+	public TransformerBlock(int embedDim, int heads, MlpMode mlpMode = MlpMode.Gelu, double logicTemperature = 1.0,
+		bool useBitLinear = false)
 		: base(nameof(TransformerBlock))
 	{
 		_ln1 = nn.LayerNorm(embedDim);
-		_attention = new CausalSelfAttention(embedDim, heads);
+		_attention = new CausalSelfAttention(embedDim, heads, useBitLinear);
 		_ln2 = nn.LayerNorm(embedDim);
-		_mlp = BuildMlp(embedDim, mlpMode, logicTemperature);
+		_mlp = BuildMlp(embedDim, mlpMode, logicTemperature, useBitLinear);
 
 		RegisterComponents();
 	}
 
 	// The feed-forward sub-layer. GELU is the conventional MLP; the logic modes swap the nonlinearity for
 	// a logic-gate network, keeping the same 4·embedDim hidden width so parameter budgets are comparable.
-	private static nn.Module<Tensor, Tensor> BuildMlp(int embedDim, MlpMode mode, double temperature)
+	private static nn.Module<Tensor, Tensor> BuildMlp(int embedDim, MlpMode mode, double temperature, bool useBitLinear)
 	{
 		var hidden = 4 * embedDim;
 		if (mode == MlpMode.Gelu)
 			return nn.Sequential(
-				nn.Linear(embedDim, hidden),
+				Linears.Make(embedDim, hidden, useBitLinear),
 				nn.GELU(),
-				nn.Linear(hidden, embedDim));
+				Linears.Make(hidden, embedDim, useBitLinear));
 
 		// A few logic layers over the expanded width. Depth gives the gate network room to compose;
 		// width (= hidden) gives its learned wiring enough signals to route.
 		var logicWidths = new[] { hidden, hidden, hidden };
-		return new LogicFeedForward(embedDim, hidden, logicWidths, hard: mode == MlpMode.LogicHard, temperature);
+		return new LogicFeedForward(embedDim, hidden, logicWidths, hard: mode == MlpMode.LogicHard, temperature, useBitLinear);
 	}
 
 	#endregion
@@ -70,6 +72,13 @@ public sealed class TransformerBlock : nn.Module<Tensor, Tensor>
 	{
 		if (_mlp is LogicFeedForward logic)
 			logic.SetTemperature(temperature);
+	}
+
+	/// <summary>Reports the MLP's logic cullability if it is a logic feed-forward (else no-op).</summary>
+	public void ReportLogicCullability(Microsoft.Extensions.Logging.ILogger log, string label)
+	{
+		if (_mlp is LogicFeedForward logic)
+			logic.ReportCullability(log, label);
 	}
 
 	/// <summary>

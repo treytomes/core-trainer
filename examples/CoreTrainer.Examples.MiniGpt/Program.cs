@@ -21,35 +21,50 @@ using ILogger = Microsoft.Extensions.Logging.ILogger;
 // each sentence). Dropout is off and we train until the loss collapses.
 // ---------------------------------------------------------------------------------------
 
-// The sentences to memorize. Each ends with a newline so the model learns a natural stop token.
-string[] sentences =
-[
-	"the quick brown fox jumps over the lazy dog.",
-	"a journey of a thousand miles begins with a single step.",
-	"to be or not to be that is the question.",
-	"the mitochondria is the powerhouse of the cell.",
-	"all that glitters is not gold.",
-];
-var corpus = string.Join("\n", sentences) + "\n";
+// Configuration (model shape, optimization, logging) comes from appsettings.yaml; the corpus (one
+// sentence per line) comes from corpus.txt. Both are copied next to the binary at build.
+var configuration = new ConfigurationBuilder()
+	.SetBasePath(AppContext.BaseDirectory)
+	.AddYamlFile("appsettings.yaml", optional: false, reloadOnChange: false)
+	.Build();
+var training = configuration.GetSection("Training");
 
-// === Hyperparameters =================================================================
-const int BLOCK_SIZE = 64;   // context length; comfortably longer than our longest sentence
-const int EMBED_DIM = 128;
-const int HEADS = 4;
-const int LAYERS = 3;
-const int EPOCHS = 3000;
-const double LEARNING_RATE = 3e-4;
-const int LOG_EVERY = 200;
-const int SEED = 1;
+var BLOCK_SIZE = training.GetValue<int>("BlockSize");
+var EMBED_DIM = training.GetValue<int>("EmbedDim");
+var HEADS = training.GetValue<int>("Heads");
+var LAYERS = training.GetValue<int>("Layers");
+var EPOCHS = training.GetValue<int>("Epochs");
+var LEARNING_RATE = training.GetValue<double>("LearningRate");
+var LOG_EVERY = training.GetValue<int>("LogEvery");
+var SEED = training.GetValue<int>("Seed");
+var BATCH_SIZE = training.GetValue<int>("BatchSize");
 // Logic-MLP temperature anneal (ignored by the GELU baseline): hot start = smooth gate/wire blends and
 // easy gradients; cold end = selections near one-hot so the soft net approaches its hard circuit.
-const double TEMP_START = 2.0;
-const double TEMP_END = 0.1;
+var TEMP_START = training.GetValue<double>("TempStart");
+var TEMP_END = training.GetValue<double>("TempEnd");
+// All linears + embeddings become BitNet ternary {-1,0,+1} weights (aggressive: includes the head and
+// embedding tables that BitNet normally leaves full precision).
+var USE_BITLINEAR = training.GetValue<bool>("UseBitLinear");
+// Also ternarize the embeddings + LM head (false = standard BitNet recipe with full-precision I/O).
+var USE_BITLINEAR_IO = training.GetValue<bool>("UseBitLinearIO");
 
-using var loggerFactory = CreateLoggerFactory();
+using var loggerFactory = CreateLoggerFactory(configuration);
 var log = loggerFactory.CreateLogger("MiniGpt");
 
 manual_seed(SEED);
+
+// Use all available cores for libtorch's intra-op matmul threading (pure speed, no effect on training
+// dynamics). Without this, the CPU backend can default to a conservative thread count.
+set_num_threads(Environment.ProcessorCount);
+
+// The sentences to memorize, one per line of corpus.txt. Blank lines are ignored; each sentence gets a
+// newline "stop" token when built into an example.
+var sentences = File.ReadAllLines(Path.Combine(AppContext.BaseDirectory, "corpus.txt"))
+	.Where(line => line.Trim().Length > 0)
+	.ToArray();
+if (sentences.Length == 0)
+	throw new InvalidOperationException("corpus.txt is empty — add at least one sentence to memorize.");
+var corpus = string.Join("\n", sentences) + "\n";
 
 var tokenizer = new CharTokenizer(corpus);
 
@@ -64,6 +79,9 @@ var exampleCount = inputs.shape[0];
 log.LogInformation("=== Mini-GPT Trainer ===");
 log.LogInformation("Corpus:   {Sentences} sentences, {Chars} chars, vocab {Vocab}", sentences.Length, corpus.Length, tokenizer.VocabSize);
 log.LogInformation("Model:    dim {Dim}, {Heads} heads, {Layers} layers, block {Block}", EMBED_DIM, HEADS, LAYERS, BLOCK_SIZE);
+log.LogInformation("Weights:  blocks {Blocks}, I/O (embeddings+head) {Io}",
+	USE_BITLINEAR ? "ternary {-1,0,+1}" : "full precision",
+	USE_BITLINEAR_IO ? "ternary {-1,0,+1}" : "full precision");
 log.LogInformation("Train:    {Examples} windows, Adam lr {Lr}, {Epochs} epochs", exampleCount, LEARNING_RATE, EPOCHS);
 
 // Model vocabulary includes the reserved pad id (index tokenizer.VocabSize), so logits cover it.
@@ -72,7 +90,8 @@ var modelVocab = tokenizer.VocabSize + 1;
 // Run all three feed-forward variants under identical conditions so the comparison is clean: the same
 // corpus, seed, epochs, and LR — only the block's nonlinearity differs. GELU is the baseline; the logic
 // variants swap in a differentiable logic-gate network (soft = fully differentiable, hard = STE circuit).
-var modes = new[] { MlpMode.Gelu, MlpMode.LogicSoft, MlpMode.LogicHard };
+// var modes = new[] { MlpMode.Gelu, MlpMode.LogicSoft, MlpMode.LogicHard };
+var modes = new[] { MlpMode.LogicSoft, MlpMode.LogicHard };
 var summary = new List<(MlpMode Mode, double FinalLoss, int Passed)>();
 
 foreach (var mode in modes)
@@ -95,12 +114,19 @@ return;
 	manual_seed(SEED); // reset per mode so every variant sees identical initialization draws
 	log.LogInformation("########## Feed-forward mode: {Mode} ##########", mode);
 
-	var model = new MiniGpt(modelVocab, BLOCK_SIZE, EMBED_DIM, HEADS, LAYERS, mode, TEMP_START);
+	var model = new MiniGpt(modelVocab, BLOCK_SIZE, EMBED_DIM, HEADS, LAYERS, mode, TEMP_START, USE_BITLINEAR, USE_BITLINEAR_IO);
+
+	// Report the parameter budget so the three feed-forward variants are comparable at a glance (the
+	// logic MLP's learnable wire/gate logits replace the GELU MLP's two weight matrices).
+	long paramCount = model.parameters().Sum(p => p.numel());
+	log.LogInformation("Params:   {Count:N0} learnable ({Millions:0.00} M)", paramCount, paramCount / 1_000_000.0);
+
 	var optimizer = optim.Adam(model.parameters(), lr: LEARNING_RATE);
 	// ignore_index = padId: padded target positions contribute nothing to the loss, so the model is
 	// trained only on real next-token predictions, not on producing padding.
 	var lossFn = nn.CrossEntropyLoss(ignore_index: padId);
 
+	var exampleN = inputs.shape[0];
 	var lastLoss = 0.0;
 	for (var epoch = 0; epoch < EPOCHS; epoch++)
 	{
@@ -113,17 +139,33 @@ return;
 		}
 
 		model.train();
-		optimizer.zero_grad();
 
-		var logits = model.forward(inputs);                   // [examples, block, vocab]
-		var flatLogits = logits.reshape(-1, modelVocab);      // CE wants [N, vocab] vs [N] targets
-		var flatTargets = targets.reshape(-1);
-		var loss = lossFn.forward(flatLogits, flatTargets);
+		// Mini-batch training: shuffle the corpus and take one Adam step per batch, so each epoch runs
+		// ceil(N / BatchSize) steps instead of a single full-batch step. More (noisier) steps per epoch
+		// converge faster than full-batch on a fixed dataset. randperm under the manual seed keeps it
+		// reproducible. epochLoss is the batch-size-weighted mean, comparable to the old full-batch loss.
+		var perm = randperm(exampleN);
+		var epochLoss = 0.0;
+		for (long start = 0; start < exampleN; start += BATCH_SIZE)
+		{
+			var count = Math.Min(BATCH_SIZE, exampleN - start);
+			var idx = perm.narrow(0, start, count);
+			var batchInputs = inputs.index_select(0, idx);
+			var batchTargets = targets.index_select(0, idx);
 
-		loss.backward();
-		optimizer.step();
+			optimizer.zero_grad();
+			var logits = model.forward(batchInputs);              // [batch, block, vocab]
+			var flatLogits = logits.reshape(-1, modelVocab);      // CE wants [N, vocab] vs [N] targets
+			var flatTargets = batchTargets.reshape(-1);
+			var loss = lossFn.forward(flatLogits, flatTargets);
 
-		lastLoss = loss.item<float>();
+			loss.backward();
+			optimizer.step();
+
+			epochLoss += loss.item<float>() * count;              // weight by batch size for a true mean
+		}
+
+		lastLoss = epochLoss / exampleN;
 		if (epoch == 0 || (epoch + 1) % LOG_EVERY == 0)
 			log.LogInformation("  epoch {Epoch,5}/{Total}   loss {Loss:0.0000}", epoch + 1, EPOCHS, lastLoss);
 	}
@@ -151,6 +193,18 @@ return;
 		log.LogInformation("  [{Mark}] \"{Prompt}...\" -> {Produced}", ok ? "PASS" : "FAIL", promptText, produced);
 	}
 	log.LogInformation("[{Mode}] Memorization: {Passed}/{Total}", mode, passed, sentences.Length);
+
+	// Cullability: how much of the trained logic MLP is real logic vs prunable structure (constants /
+	// passthroughs). Earns-or-refutes the "the MLP became cullable logic" claim. No-op for GELU.
+	if (mode != MlpMode.Gelu)
+	{
+		log.LogInformation("=== [{Mode}] Logic-MLP cullability ===", mode);
+		model.ReportLogicCullability(log);
+	}
+	// Compile step: export the trained ternary weights as packed trits and report the deployable
+	// artifact's size/compression AND sparsity (weights trained to exactly zero). No-op / "nothing to
+	// compile" for a full-precision model. Bit-identical to inference.
+	TernaryCompiler.CompileAndReport(model, log);
 
 	model.Dispose();
 	return (mode, lastLoss, passed);
@@ -197,15 +251,18 @@ static (Tensor Inputs, Tensor Targets, long PadId) BuildExamples(string[] senten
 	return (inputs, targets, padId);
 }
 
-static ILoggerFactory CreateLoggerFactory()
+static ILoggerFactory CreateLoggerFactory(IConfiguration configuration)
 {
-	var configuration = new ConfigurationBuilder()
-		.SetBasePath(AppContext.BaseDirectory)
-		.AddYamlFile("appsettings.yaml", optional: false, reloadOnChange: false)
-		.Build();
+	// Console sink + levels come from appsettings.yaml; the file sink is added here with a per-run
+	// timestamped filename so each run writes its own log rather than stacking into one day-rolling file.
+	var runStamp = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+	var logPath = Path.Combine(AppContext.BaseDirectory, "logs", $"mini-gpt-{runStamp}.log");
 
 	var serilogLogger = new Serilog.LoggerConfiguration()
 		.ReadFrom.Configuration(configuration)
+		.WriteTo.File(
+			path: logPath,
+			outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
 		.CreateLogger();
 
 	return new SerilogLoggerFactory(serilogLogger, dispose: true);

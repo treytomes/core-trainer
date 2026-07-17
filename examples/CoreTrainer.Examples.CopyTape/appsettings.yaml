@@ -1,0 +1,36 @@
+# Hyperparameters for the copy-machine head-tracking probe. Corpus generated in-process.
+Training:
+  # The probe: plain (forward copy), reverse (backward copy), or zip (interleave two inputs).
+  Mode: plain
+  # Model shape (plain full-precision GELU, NoPE). Copy is trivial, so start small — faster, and a small
+  # model has less capacity to memorize its way around head-tracking (a cleaner probe).
+  BlockSize: 128
+  EmbedDim: 64
+  Heads: 4
+  Layers: 2
+  # Optimization.
+  Epochs: 4000
+  LearningRate: 0.0003
+  Seed: 1
+  BatchSize: 64
+  LogEvery: 100 # cheap loss + one sample generation
+  EvalEvery: 500 # expensive free-generation exec-accuracy (per length)
+  # Length-generalization split: train short, test long (disjoint).
+  TrainBits: [4, 6, 8, 10, 12]
+  HeldOutBits: [16, 20, 24]
+  MaxPairsPerWidth: 256
+  # Checkpointing.
+  CheckpointEvery: 500
+  CheckpointPath: checkpoints/copy-tape
+  ResumeIfPresent: true
+
+Serilog:
+  MinimumLevel:
+    Default: Information
+    Override:
+      Microsoft: Warning
+      System: Warning
+  WriteTo:
+    - Name: Console
+      Args:
+        outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}"

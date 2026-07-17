@@ -9,6 +9,9 @@
     <Project Path="tests/CoreTrainer.Tests/CoreTrainer.Tests.csproj" />
   </Folder>
   <Folder Name="/examples/">
+    <Project Path="examples/CoreTrainer.Examples.AdderTape/CoreTrainer.Examples.AdderTape.csproj" />
+    <Project Path="examples/CoreTrainer.Examples.CopyTape/CoreTrainer.Examples.CopyTape.csproj" />
+    <Project Path="examples/CoreTrainer.Examples.HeadTrack/CoreTrainer.Examples.HeadTrack.csproj" />
     <Project Path="examples/CoreTrainer.Examples.NandArithmetic/CoreTrainer.Examples.NandArithmetic.csproj" />
     <Project Path="examples/CoreTrainer.Examples.DiffNand/CoreTrainer.Examples.DiffNand.csproj" />
     <Project Path="examples/CoreTrainer.Examples.LogicMlp/CoreTrainer.Examples.LogicMlp.csproj" />

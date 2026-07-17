@@ -1,0 +1,46 @@
+# Head-move primitive probe: track a head through L/R moves, measure the reliable head-tracking
+# distance D and how it scales with model size. Corpus generated in-process.
+Training:
+  # Model shape (plain full-precision GELU, NoPE). One axis is swept per campaign; the other dims are
+  # pinned to these values. SweepAxis = "width" (vary EmbedDim, Layers pinned) or "depth" (vary Layers,
+  # EmbedDim pinned). SweepValues is the list for the swept axis. Heads must divide EmbedDim.
+  BlockSize: 256
+  Heads: 4
+  EmbedDim: 64  # pinned when SweepAxis=depth; ignored when SweepAxis=width
+  Layers: 2     # pinned when SweepAxis=width; ignored when SweepAxis=depth
+  SweepAxis: depth
+  # Depth campaign: head-tracking is a sequential accumulation, so depth (compositional steps per forward
+  # pass) may scale where width (precision) saturated at ~73% (see FINDINGS.md). EmbedDim pinned at 64 —
+  # the width where accuracy first plateaued, so we isolate depth's effect from width's.
+  SweepValues: [1, 2, 4, 6, 8]
+  # (Width campaign, complete: SweepAxis=width, EmbedDim pinned N/A, SweepValues [32,64,128,256].)
+  # Optimization.
+  Epochs: 2000 # mean-accuracy plateaus by ~epoch 500-1000 on this task; 2000 has margin, 4000 was 2x waste
+  LearningRate: 0.0003
+  Seed: 1
+  BatchSize: 64
+  LogEvery: 100
+  EvalEvery: 500
+  # Length axis is MOVE COUNT. Train on short move sequences; the D-curve is measured over a dense sweep
+  # of longer counts (EvalMoveCounts) so D — the count where per-step accuracy crosses the threshold — is
+  # well located, not interpolated between sparse points.
+  TrainMoveCounts: [4, 6, 8, 10, 12, 14, 16]
+  EvalMoveCounts: [4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48]
+  ExamplesPerCount: 256
+  # D threshold: the largest move count whose per-step trace accuracy is >= this is reported as D.
+  DThreshold: 0.90
+  # Checkpointing.
+  CheckpointEvery: 500
+  CheckpointPath: checkpoints/head-track
+  ResumeIfPresent: true
+
+Serilog:
+  MinimumLevel:
+    Default: Information
+    Override:
+      Microsoft: Warning
+      System: Warning
+  WriteTo:
+    - Name: Console
+      Args:
+        outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}"

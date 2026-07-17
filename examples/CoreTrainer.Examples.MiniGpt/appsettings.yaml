@@ -1,5 +1,35 @@
-# Serilog configuration for the Mini-GPT example. Mirrors the format used by CoreTrainer.Console
-# and the other examples so logs are directly comparable.
+# Training and model hyperparameters for the Mini-GPT example. The corpus (sentences to memorize)
+# lives in corpus.txt, one sentence per line.
+Training:
+  # Model shape.
+  BlockSize: 96 # max context length (positions); longest corpus sentence is 81 chars, so 96 has margin
+  EmbedDim: 256 # embedding / model dimension (doubled from 128 to give ternary embeddings more room)
+  Heads: 4 # attention heads per block (must divide EmbedDim)
+  Layers: 3 # stacked transformer blocks
+  # Optimization.
+  Epochs: 6000 # GELU-ternary memorizes at ~4600 on this config; 6000 gives margin without wasted flat epochs
+  LearningRate: 0.0003
+  Seed: 1
+  # Mini-batch size: examples per Adam step. Each epoch shuffles the corpus and takes ceil(N/BatchSize)
+  # steps, so smaller batches = more (noisier, faster-converging) steps per epoch than full-batch.
+  BatchSize: 8
+  # Logging cadence.
+  LogEvery: 200 # epochs between loss log lines
+  # Logic-MLP temperature anneal (ignored by the GELU baseline): hot start = smooth gate/wire blends
+  # and easy gradients; cold end = selections near one-hot so the soft net approaches its hard circuit.
+  TempStart: 2.0
+  TempEnd: 0.1
+  # BitNet ternary {-1,0,+1} weights in the transformer blocks (attention + MLP/logic).
+  UseBitLinear: true
+  # Also ternarize the I/O boundary (embeddings + LM head). BitNet leaves these full precision because
+  # they are the most precision-sensitive layers; false = standard BitNet recipe, true = everything
+  # ternary. The all-ternary run showed a straight-line loss crawl (no memorization) — this isolates
+  # whether the ternary I/O boundary is the bottleneck.
+  UseBitLinearIO: false
+
+# Serilog configuration for the Mini-GPT example. Only the console sink is configured here; the file
+# sink is added in code (Program.cs) with a per-run timestamped filename, so each run writes its own
+# log file instead of stacking into a day-rolling one.
 Serilog:
   MinimumLevel:
     Default: Information
@@ -10,9 +40,3 @@ Serilog:
     - Name: Console
       Args:
         outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}"
-    - Name: File
-      Args:
-        path: logs/mini-gpt-.log
-        rollingInterval: Day
-        retainedFileCountLimit: 7
-        outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}"

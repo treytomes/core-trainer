@@ -25,12 +25,12 @@ public sealed class CausalSelfAttention : nn.Module<Tensor, Tensor>
 	/// <summary>
 	/// Fused projection to [Q | K | V].
 	/// </summary>
-	private readonly Linear _qkv;
+	private readonly nn.Module<Tensor, Tensor> _qkv;
 
 	/// <summary>
 	/// Output projection back to the embedding dimension.
 	/// </summary>
-	private readonly Linear _proj;
+	private readonly nn.Module<Tensor, Tensor> _proj;
 
 	#endregion
 
@@ -38,15 +38,16 @@ public sealed class CausalSelfAttention : nn.Module<Tensor, Tensor>
 
 	/// <param name="embedDim">Model/embedding dimension.</param>
 	/// <param name="heads">Number of attention heads; must divide <paramref name="embedDim"/>.</param>
-	public CausalSelfAttention(int embedDim, int heads) : base(nameof(CausalSelfAttention))
+	/// <param name="useBitLinear">Use BitNet ternary-weight linears in place of full-precision ones.</param>
+	public CausalSelfAttention(int embedDim, int heads, bool useBitLinear = false) : base(nameof(CausalSelfAttention))
 	{
 		if (embedDim % heads != 0)
 			throw new ArgumentException($"embedDim ({embedDim}) must be divisible by heads ({heads}).");
 
 		_heads = heads;
 		_headDim = embedDim / heads;
-		_qkv = nn.Linear(embedDim, 3 * embedDim);
-		_proj = nn.Linear(embedDim, embedDim);
+		_qkv = Linears.Make(embedDim, 3 * embedDim, useBitLinear);
+		_proj = Linears.Make(embedDim, embedDim, useBitLinear);
 
 		RegisterComponents();
 	}

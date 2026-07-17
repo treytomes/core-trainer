@@ -1,0 +1,38 @@
+# Hyperparameters for the context-as-tape binary-adder experiment. The corpus is generated in-process
+# (AdderTape.Render), not read from a file.
+Training:
+  # Model shape (plain full-precision GELU, NoPE — no positional embeddings).
+  BlockSize: 256 # max context length; comfortably covers the longest held-out (8-bit) tape
+  EmbedDim: 128
+  Heads: 4
+  Layers: 4
+  # Optimization.
+  Epochs: 4000
+  LearningRate: 0.0003
+  Seed: 1
+  BatchSize: 64
+  LogEvery: 100 # epochs between cheap teacher-forced train+val loss lines (one batched forward pass)
+  EvalEvery: 500 # epochs between expensive free-generation exec-accuracy evals (autoregressive)
+  # Checkpointing: save model+optimizer+epoch every N epochs (and at the end) to this path, and resume
+  # from it on startup if present. Lets a long run be stopped and continued without losing training time.
+  CheckpointEvery: 250
+  CheckpointPath: checkpoints/adder-tape
+  ResumeIfPresent: true
+  # Length-generalization split: TRAIN on these bit-widths, TEST on unseen longer ones. The whole point
+  # is that these are DISJOINT — if the model generalizes to the held-out lengths it learned the step
+  # function + carry-forward (executing the algorithm on the tape), not a bounded-depth memorization.
+  TrainBits: [1, 2, 3, 4]
+  HeldOutBits: [5, 6, 7, 8]
+  # Cap on (a,b) pairs per bit-width (0 = all). Small widths are enumerated fully; large widths sampled.
+  MaxPairsPerWidth: 512
+
+Serilog:
+  MinimumLevel:
+    Default: Information
+    Override:
+      Microsoft: Warning
+      System: Warning
+  WriteTo:
+    - Name: Console
+      Args:
+        outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}"

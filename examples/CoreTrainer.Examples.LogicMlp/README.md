@@ -88,6 +88,59 @@ specific signals routed to many specific places, and fixed wiring can't deliver 
 So LogicMlp and DiffNand hit **complementary** ceilings: DiffNand learns wiring but is stuck with one
 gate; LogicMlp learns gates but is stuck with one wiring. Neither degree of freedom alone is enough.
 
+### Learning wiring *and* gates jointly ([JointLogicNet](JointLogicNet.cs))
+
+The obvious next step — free both degrees of freedom (softmax over input wires from a cumulative skip
+pool, *and* softmax over gate function, both STE-hardened) — gives a **mixed** result that is itself
+informative. Running the same ladder for both architectures (hardened netlist accuracy):
+
+| rung | gate-only | wire+gate |
+|------|-----------|-----------|
+| bitwise XOR (4-bit) | 75% | **100% SOLVED** |
+| parity (4-bit) | **100% SOLVED** | 94% |
+| parity (8-bit) | 56% | 47% |
+| adder (2-bit) | 89% | 78% |
+| adder (4-bit) | 59% | 66% |
+
+The mechanism is **proven**: wire+gate *solves bitwise-XOR-4 exactly* — the very rung gate-only failed
+on for lack of routing. Both degrees of freedom train. But adding learnable wiring made most other
+rungs **worse**, and the soft-vs-hard gap is the tell: gate-only had soft ≈ hard everywhere, while
+wire+gate's soft and hard diverge. Freeing the wiring adds a *second* coupled discrete argmax per gate,
+and the optimization landscape got harder faster than the extra capacity helped. **We traded a routing
+wall for an optimization wall.** bitwise-XOR was routing-limited (so it won big); the deeper tasks are
+optimization-limited (so they regressed).
+
+### The payoff: a logic-gate network as a transformer MLP
+
+The standalone circuits demand 100% to be valid — but a transformer MLP does not. It is only a
+per-token feature transform, smoothed by LayerNorm, the residual add, and the next attention layer, so
+it needs to be a *useful nonlinearity*, not an exact circuit. Dropping the wire+gate logic network in
+as the MLP of the [MiniGpt](../CoreTrainer.Examples.MiniGpt/) transformer (encode `Linear` → bipolar
+quantize → logic layers → decode `Linear`, replacing `Linear → GELU → Linear`) and training the whole
+model end-to-end on the memorization task gives:
+
+| feed-forward | final loss | memorized |
+|--------------|-----------|-----------|
+| GELU (baseline) | 0.0217 | 5/5 |
+| logic (soft) | 0.0218 | 5/5 |
+| logic (hard, STE) | 0.0218 | 5/5 |
+
+**All three are indistinguishable.** Two findings stand out:
+
+1. **The logic MLP matches GELU** — a network that learns its wiring and gates is a viable transformer
+   feed-forward, and the continuous↔bipolar encode/decode boundary (BitNet's activation-quantization
+   idea) survives the round-trip.
+2. **Hard matches soft here, though hardening *hurt* the standalone circuits.** End-to-end training
+   lets the rest of the transformer adapt around the hard logic block — the Linear boundaries and
+   surrounding layers absorb the STE commitment that broke isolated circuits. The forgiving,
+   not-100%-required nature of a language task is exactly why the optimization wall above stops
+   mattering here.
+
+Caveats worth stating: this is *memorization* (5 sentences), not generalization or scale; the logic
+modes are ~5× slower per epoch than GELU (the soft gate/wire blends are expensive — though a hardened,
+culled deployment circuit would be cheap); and the cullability of the transformer's logic blocks has
+not yet been measured.
+
 ### Cullability (the payoff shared with the ternary-weight work)
 
 Every run's netlist is dominated by **passthroughs and constants** — 79–93% of gates are pure wiring
@@ -100,14 +153,19 @@ and the rest is routing that a better architecture would not need to spend gates
 
 ## What remains to be researched
 
-1. **Learn wiring *and* gates jointly** — the architecture this ladder implies is necessary. Add a
-   softmax over input wires (DiffNand's mechanism) *on top of* the softmax over gate function
-   (LogicMlp's), both STE-hardened. This is the genuine fusion of the two examples and the direct
-   answer to the routing wall.
-2. **Rescue fixed wiring cheaply** — before adding learnable wiring, test whether much wider layers +
-   a cumulative skip pool (so far more random pairings and routes exist) let routing-by-abundance
-   solve bitwise-XOR and parity-8. If width alone closes the gap, the simpler architecture survives.
-3. **The larger goal** — replace a transformer's MLP block (`fc1 → GELU → fc2`) with a trainable logic
-   network of this kind, so the model's per-token feature transformation becomes cullable logic. That
-   is the convergence this example is a stepping stone toward; the ladder says the block will need
-   *learnable wiring*, not just learnable gates, to work.
+The core convergence is now demonstrated: a learned-wiring, learned-gate logic network trains as a
+transformer MLP at parity with GELU (see above). Open threads, roughly in order of promise:
+
+1. **Measure cullability in the transformer.** Run the netlist report on the trained logic MLP blocks:
+   how many gates are real logic vs passthrough/constant? If most are real logic, the "the MLP became
+   cullable logic" claim is earned; if most are passthrough, the block is mostly wiring and the win is
+   thinner. This is the first thing to check.
+2. **Generalization and scale.** All results are 5-sentence *memorization*. Test a larger corpus
+   (generalization, not overfitting) and larger models to see whether the GELU-parity holds.
+3. **Fix the standalone optimization wall.** The joint wire+gate net regressed on deep tasks (an
+   optimization, not capacity, problem — see the soft-vs-hard gap). Try a gentler/longer temperature
+   anneal, longer soft warmup, or a wire-entropy penalty. Only matters if standalone exact circuits are
+   a goal; the transformer use case already works without it.
+4. **Extract and run the hardened MLP.** Since hard mode matches soft in the transformer, a trained
+   model's logic blocks can be exported as discrete circuits and the culled circuit run directly —
+   the cheap-deployment payoff. Verify the exported circuit is bit-identical to the hard-forward model.
